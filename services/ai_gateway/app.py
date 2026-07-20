@@ -150,9 +150,9 @@ def build_adapters(config: GatewayConfig, secrets: SecretManager) -> dict[str, P
     adapters: dict[str, ProviderAdapter] = {}
     for provider in config.providers:
         if provider.adapter == "azure-openai":
-            adapters[provider.id] = AzureOpenAIAdapter(provider.id, provider.endpoint, provider.deployment or "", provider.secret_ref, secrets)
+            adapters[provider.id] = AzureOpenAIAdapter(provider.id, provider.endpoint, provider.model_map, provider.secret_ref, secrets)
         elif provider.adapter == "openai":
-            adapters[provider.id] = OpenAIAdapter(provider.id, provider.endpoint, provider.secret_ref, secrets)
+            adapters[provider.id] = OpenAIAdapter(provider.id, provider.endpoint, provider.model_map, provider.secret_ref, secrets)
     return adapters
 
 

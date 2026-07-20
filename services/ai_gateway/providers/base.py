@@ -20,6 +20,16 @@ class ProviderTimeout(ProviderError):
         super().__init__(message, retryable=True)
 
 
+def resolve_provider_model(model_map: Mapping[str, str], alias: str) -> str:
+    try:
+        provider_model = model_map[alias]
+    except KeyError as exc:
+        raise ProviderError("provider model mapping is unavailable", fallback_allowed=False, code="unmapped_model") from exc
+    if not isinstance(provider_model, str) or not provider_model.strip():
+        raise ProviderError("provider model mapping is invalid", fallback_allowed=False, code="unmapped_model")
+    return provider_model
+
+
 @dataclass(frozen=True)
 class ProviderRequest:
     request_id: str

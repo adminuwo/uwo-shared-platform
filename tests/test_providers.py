@@ -43,10 +43,11 @@ class CaptureTransport:
 class ProviderAdapterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.secrets = MappingSecretManager({"env://TEST_KEY": "credential-value"})
-        self.request = ProviderRequest("request-1", "tenant-1", "shared-model-alias", "private prompt")
+        self.request = ProviderRequest("request-1", "tenant-1", "uwo-general-v1", "private prompt")
+        self.model_map = {"uwo-general-v1": "provider-general-model", "uwo-legal-v1": "provider-legal-model"}
 
     def openai(self, response):
-        return OpenAIAdapter("openai-1", "https://openai.example", "env://TEST_KEY", self.secrets, CaptureTransport(response))
+        return OpenAIAdapter("openai-1", "https://openai.example", self.model_map, "env://TEST_KEY", self.secrets, CaptureTransport(response))
 
     def test_normal_text_response_and_provider_id_propagation(self) -> None:
         response = self.openai(raw_response(message(output_text("normal result")), response_id="resp_preserved")).execute(self.request, 3)
@@ -105,27 +106,50 @@ class ProviderAdapterTests(unittest.TestCase):
 
     def test_azure_uses_v1_url_deployment_model_api_key_and_request_id(self) -> None:
         transport = CaptureTransport()
-        adapter = AzureOpenAIAdapter("azure-1", "https://azure.example", "deployed-model", "env://TEST_KEY", self.secrets, transport)
+        adapter = AzureOpenAIAdapter("azure-1", "https://azure.example", self.model_map, "env://TEST_KEY", self.secrets, transport)
         adapter.execute(self.request, 4.5)
         url, headers, body, timeout = transport.calls[0]
         self.assertEqual(url, "https://azure.example/openai/v1/responses")
-        self.assertEqual(body["model"], "deployed-model")
+        self.assertEqual(body["model"], "provider-general-model")
         self.assertEqual(headers["api-key"], "credential-value")
         self.assertEqual(headers["x-ms-client-request-id"], "request-1")
         self.assertFalse(body["store"])
         self.assertEqual(timeout, 4.5)
 
+    def test_azure_selects_legal_deployment_from_shared_alias(self) -> None:
+        transport = CaptureTransport()
+        adapter = AzureOpenAIAdapter("azure-1", "https://azure.example", self.model_map, "env://TEST_KEY", self.secrets, transport)
+        legal_request = ProviderRequest("request-legal", "tenant-1", "uwo-legal-v1", "legal prompt")
+        adapter.execute(legal_request, 3)
+        self.assertEqual(transport.calls[0][2]["model"], "provider-legal-model")
+
     def test_openai_uses_v1_url_and_bearer_secret(self) -> None:
         transport = CaptureTransport()
-        adapter = OpenAIAdapter("openai-1", "https://openai.example", "env://TEST_KEY", self.secrets, transport)
+        adapter = OpenAIAdapter("openai-1", "https://openai.example", self.model_map, "env://TEST_KEY", self.secrets, transport)
         adapter.execute(self.request, 3)
-        url, headers, _, _ = transport.calls[0]
+        url, headers, body, _ = transport.calls[0]
         self.assertEqual(url, "https://openai.example/v1/responses")
         self.assertEqual(headers["Authorization"], "Bearer credential-value")
         self.assertEqual(headers["X-Client-Request-Id"], "request-1")
+        self.assertEqual(body["model"], "provider-general-model")
+
+    def test_openai_selects_legal_provider_model_from_shared_alias(self) -> None:
+        transport = CaptureTransport()
+        adapter = OpenAIAdapter("openai-1", "https://openai.example", self.model_map, "env://TEST_KEY", self.secrets, transport)
+        legal_request = ProviderRequest("request-legal", "tenant-1", "uwo-legal-v1", "legal prompt")
+        adapter.execute(legal_request, 3)
+        self.assertEqual(transport.calls[0][2]["model"], "provider-legal-model")
+
+    def test_unmapped_alias_fails_before_transport_call(self) -> None:
+        transport = CaptureTransport()
+        adapter = OpenAIAdapter("openai-1", "https://openai.example", {}, "env://MISSING", MappingSecretManager({}), transport)
+        with self.assertRaises(ProviderError) as caught:
+            adapter.execute(self.request, 3)
+        self.assertEqual(caught.exception.code, "unmapped_model")
+        self.assertEqual(transport.calls, [])
 
     def test_missing_secret_fails_closed(self) -> None:
-        adapter = OpenAIAdapter("openai-1", "https://openai.example", "env://MISSING", self.secrets, CaptureTransport())
+        adapter = OpenAIAdapter("openai-1", "https://openai.example", self.model_map, "env://MISSING", self.secrets, CaptureTransport())
         with self.assertRaises(SecretError):
             adapter.execute(self.request, 3)
 

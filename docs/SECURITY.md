@@ -19,6 +19,7 @@ The gateway is deny-by-default: a tenant without an explicit policy cannot route
 
 - `UWO_AUTH_SIGNING_KEY` must be generated and rotated in a managed secret store and contain at least 32 unpredictable characters. Shared HMAC identity is an internal foundation; migrate to asymmetric workload identity before untrusted external access.
 - Provider configuration contains only `env://` references. Deployment automation maps those names to secret-manager values; credentials must never be supplied in HTTP requests.
+- Provider-specific model IDs and Azure deployments come only from reviewed `model_map` configuration. Caller-supplied UWO aliases cannot select arbitrary provider models, and missing mappings fail before secret access or transport.
 - Request IDs are constrained to 128 safe characters and returned in `X-Request-ID`. They are correlation metadata, not authorization credentials.
 - Provider endpoints must use HTTPS. The committed `.example.invalid` endpoints cannot reach production services.
 - The configuration-backed content-safety authorizer is internal/test-only. Setting `UWO_ENVIRONMENT=production` blocks startup until a real production integration is supplied.

@@ -78,11 +78,31 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(ConfigurationError):
             self.write_and_load(config)
 
-    def test_azure_provider_no_longer_requires_legacy_api_version(self) -> None:
+    def test_provider_model_maps_include_general_and_legal_aliases(self) -> None:
         config = self.altered_config()
         self.assertNotIn("api_version", config["providers"][0])
         loaded = self.write_and_load(config)
-        self.assertEqual(loaded.providers[0].deployment, "uwo-general-v1")
+        azure = loaded.providers[0]
+        self.assertEqual(azure.model_map["uwo-general-v1"], "azure-in-general-deployment")
+        self.assertEqual(azure.model_map["uwo-legal-v1"], "azure-in-legal-deployment")
+
+    def test_missing_model_mapping_is_rejected(self) -> None:
+        config = self.altered_config()
+        del config["providers"][0]["model_map"]["uwo-legal-v1"]
+        with self.assertRaises(ConfigurationError):
+            self.write_and_load(config)
+
+    def test_undeclared_extra_model_mapping_is_rejected(self) -> None:
+        config = self.altered_config()
+        config["providers"][0]["model_map"]["undeclared-alias"] = "provider-model"
+        with self.assertRaises(ConfigurationError):
+            self.write_and_load(config)
+
+    def test_empty_provider_model_mapping_is_rejected(self) -> None:
+        config = self.altered_config()
+        config["providers"][0]["model_map"]["uwo-general-v1"] = ""
+        with self.assertRaises(ConfigurationError):
+            self.write_and_load(config)
 
     def test_invalid_content_safety_policy_is_rejected(self) -> None:
         config = self.altered_config()

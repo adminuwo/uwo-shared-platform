@@ -24,9 +24,15 @@ def validate(root: Path = ROOT) -> list[str]:
             errors.append(f"provider {index} must use an env:// secret reference")
         if not str(provider.get("endpoint", "")).startswith("https://"):
             errors.append(f"provider {index} endpoint must use HTTPS")
+        models = provider.get("models")
+        model_map = provider.get("model_map")
+        if not isinstance(models, list) or not models or not all(isinstance(alias, str) and alias.strip() for alias in models) or len(set(models)) != len(models) or not isinstance(model_map, dict):
+            errors.append(f"provider {index} must define models and model_map")
+        elif set(models) != set(model_map):
+            errors.append(f"provider {index} model_map must exactly match declared models")
+        elif not all(isinstance(alias, str) and alias.strip() and isinstance(value, str) and value.strip() for alias, value in model_map.items()):
+            errors.append(f"provider {index} model_map values must be non-empty strings")
         if provider.get("adapter") == "azure-openai":
-            if not isinstance(provider.get("deployment"), str) or not provider["deployment"]:
-                errors.append(f"Azure provider {index} must define a deployment")
             if "api_version" in provider:
                 errors.append(f"Azure provider {index} must use the v1 contract without api_version")
     for tenant_id, policy in config.get("tenant_policies", {}).items():

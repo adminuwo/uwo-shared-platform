@@ -7,7 +7,10 @@
       "priority": 10,
       "adapter": "azure-openai",
       "endpoint": "https://uwo-in.example.invalid",
-      "deployment": "uwo-general-v1",
+      "model_map": {
+        "uwo-general-v1": "azure-in-general-deployment",
+        "uwo-legal-v1": "azure-in-legal-deployment"
+      },
       "secret_ref": "env://UWO_AZURE_OPENAI_IN_KEY"
     },
     {
@@ -17,6 +20,7 @@
       "priority": 20,
       "adapter": "openai",
       "endpoint": "https://openai.example.invalid",
+      "model_map": {"uwo-general-v1": "openai-general-model-example"},
       "secret_ref": "env://UWO_OPENAI_API_KEY"
     },
     {
@@ -26,7 +30,10 @@
       "priority": 30,
       "adapter": "azure-openai",
       "endpoint": "https://uwo-eu.example.invalid",
-      "deployment": "uwo-legal-v1",
+      "model_map": {
+        "uwo-general-v1": "azure-eu-general-deployment",
+        "uwo-legal-v1": "azure-eu-legal-deployment"
+      },
       "secret_ref": "env://UWO_AZURE_OPENAI_EU_KEY"
     }
   ],
