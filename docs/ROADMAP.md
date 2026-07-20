@@ -23,7 +23,9 @@ Exit: controlled internal workloads can execute models with end-to-end auditabil
 
 ## Phase 3 — Platform integration
 
-- Identity, roles, entitlement, billing, storage, notification, analytics, and audit services
+- Phase 3A foundation: versioned identity/tenancy contracts; isolated tenant, membership, role, permission, entitlement, and policy-version administration; repository boundaries; optimistic concurrency; idempotency; and redacted audit
+- Durable identity directory and control-plane repositories, policy promotion, and workload-identity integration
+- Billing, storage, notification, analytics, and durable audit services
 - Tenant administration API and policy promotion workflow
 - OpenTelemetry traces, metrics, SLOs, alerting, and operational runbooks
 

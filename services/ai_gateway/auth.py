@@ -7,8 +7,9 @@ import hashlib
 import hmac
 import json
 import time
-from dataclasses import dataclass
 from typing import Callable, Protocol
+
+from packages.contracts import VerifiedSubjectIdentity
 
 
 class AuthenticationError(ValueError):
@@ -17,10 +18,7 @@ class AuthenticationError(ValueError):
         self.code = code
 
 
-@dataclass(frozen=True)
-class VerifiedIdentity:
-    subject: str
-    tenant_id: str
+VerifiedIdentity = VerifiedSubjectIdentity
 
 
 class Authenticator(Protocol):

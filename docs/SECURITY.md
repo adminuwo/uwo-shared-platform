@@ -28,4 +28,17 @@ The gateway is deny-by-default: a tenant without an explicit policy cannot route
 
 The execution endpoint can invoke providers only after all configured gates pass, but this repository does not deploy the service or contain real credentials. Durable audit storage, a live billing service, rate limiting, an external content-safety service, asymmetric workload identity, provider-private networking, and production incident controls remain required before serving external traffic. These gaps are tracked in the roadmap.
 
+## Identity and tenancy control plane
+
+- Authenticate every `/v1` administration request through a deployment-supplied trusted authenticator. The public health check exposes no tenant data.
+- Grant cross-tenant authority only to explicitly configured platform administrators. Tenant administrators must have an active membership, a known role, the required permission, and a verified tenant matching the target path.
+- Treat tenant identifiers in paths or payloads only as requested resources, never as authorization evidence. Unknown tenants, subjects, roles, permissions, entitlements, and policy versions fail closed.
+- A suspended tenant cannot perform administration or receive effective entitlements. Only platform administrators may reactivate it.
+- Require optimistic aggregate versions for mutations and reject stale writes. Require bounded idempotency keys for tenant creation and entitlement grants; key reuse with conflicting input is rejected.
+- Keep mutable state behind repository interfaces. In-memory repositories and the static subject directory are test-only; the executable entry point fails startup until trusted authentication and durable repositories are injected.
+- Control-plane audit events use an allowlisted schema containing correlation and resource identifiers only. They exclude bearer tokens, authentication material, secrets, and request bodies.
+- Limit request bodies to 65,536 bytes, constrain request IDs and idempotency keys, bound list pages to 100 records, return `no-store` responses, and preserve tenant isolation at the service layer as well as the HTTP boundary.
+
+Phase 3A does not add production persistence, credentials, or deployment infrastructure. Before production use, integrate workload identity, a durable identity directory and repositories, encrypted regional storage, immutable audit ingestion, rate limiting, policy promotion approval, and recovery controls.
+
 Report vulnerabilities privately to the repository owners. Do not open public issues containing secrets or exploitable details.
