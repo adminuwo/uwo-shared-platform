@@ -8,7 +8,6 @@
       "adapter": "azure-openai",
       "endpoint": "https://uwo-in.example.invalid",
       "deployment": "uwo-general-v1",
-      "api_version": "2025-04-01-preview",
       "secret_ref": "env://UWO_AZURE_OPENAI_IN_KEY"
     },
     {
@@ -28,7 +27,6 @@
       "adapter": "azure-openai",
       "endpoint": "https://uwo-eu.example.invalid",
       "deployment": "uwo-legal-v1",
-      "api_version": "2025-04-01-preview",
       "secret_ref": "env://UWO_AZURE_OPENAI_EU_KEY"
     }
   ],
@@ -39,7 +37,8 @@
       "allowed_regions": ["in"],
       "allowed_products": ["aisa", "ai-mall"],
       "allowed_models": ["uwo-general-v1"],
-      "billing_authorized": true
+      "billing_authorized": true,
+      "content_safety": {"enabled": true, "blocked_terms": ["blocked-content"]}
     },
     "tenant-legal-eu": {
       "allowed_providers": ["azure-openai-eu"],
@@ -47,7 +46,8 @@
       "allowed_regions": ["eu"],
       "allowed_products": ["ai-legal-professional"],
       "allowed_models": ["uwo-legal-v1"],
-      "billing_authorized": true
+      "billing_authorized": true,
+      "content_safety": {"enabled": true, "blocked_terms": ["blocked-content"]}
     },
     "tenant-block-example": {
       "allowed_providers": ["azure-openai-in", "openai-in"],
@@ -55,7 +55,8 @@
       "allowed_regions": ["in"],
       "allowed_products": ["aisa"],
       "allowed_models": ["uwo-general-v1"],
-      "billing_authorized": false
+      "billing_authorized": false,
+      "content_safety": {"enabled": true, "blocked_terms": ["blocked-content"]}
     }
   }
 }

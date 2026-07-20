@@ -19,8 +19,9 @@ from .auth import AuthenticationError, Authenticator, HmacBearerAuthenticator, V
 from .authorization import AuthorizationError, EntitlementAuthorizer
 from .billing import BillingError, ConfigBillingAuthorizer
 from .config import ConfigurationError, GatewayConfig, load_config
+from .content_safety import ConfigContentSafetyAuthorizer, ContentSafetyAuthorizer, ContentSafetyError
 from .execution import SecureExecutionRequest, SecureExecutionService
-from .providers import AzureOpenAIAdapter, OpenAIAdapter, ProviderAdapter
+from .providers import AzureOpenAIAdapter, OpenAIAdapter, ProviderAdapter, ProviderError
 from .resilience import ProviderUnavailable, ResiliencePolicy, ResilientProviderExecutor
 from .router import ModelRouter, RouteRequest, RoutingError
 from .secrets import EnvironmentSecretManager, SecretError, SecretManager
@@ -119,6 +120,15 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.dependencies.audit.emit(audit_event("billing.authorization", request_id, "denied", tenant_id=identity.tenant_id if identity else None, reason_code=exc.code))
             self._error(HTTPStatus.PAYMENT_REQUIRED, exc.code, str(exc), request_id)
             return
+        except ContentSafetyError as exc:
+            self.dependencies.audit.emit(audit_event("content_safety.authorization", request_id, "denied", tenant_id=identity.tenant_id if identity else None, reason_code=exc.code))
+            self._error(HTTPStatus.UNPROCESSABLE_ENTITY, exc.code, str(exc), request_id)
+            return
+        except ProviderError as exc:
+            status = HTTPStatus.UNPROCESSABLE_ENTITY if exc.code == "provider_refusal" else HTTPStatus.BAD_GATEWAY
+            self.dependencies.audit.emit(audit_event("provider.execution", request_id, "failed", tenant_id=identity.tenant_id if identity else None, reason_code=exc.code))
+            self._error(status, exc.code, str(exc), request_id)
+            return
         except RoutingError as exc:
             self.dependencies.audit.emit(audit_event("route.selection", request_id, "denied", tenant_id=identity.tenant_id if identity else None, reason_code=exc.code))
             self._error(HTTPStatus.FORBIDDEN, exc.code, str(exc), request_id)
@@ -140,29 +150,34 @@ def build_adapters(config: GatewayConfig, secrets: SecretManager) -> dict[str, P
     adapters: dict[str, ProviderAdapter] = {}
     for provider in config.providers:
         if provider.adapter == "azure-openai":
-            adapters[provider.id] = AzureOpenAIAdapter(provider.id, provider.endpoint, provider.deployment or "", provider.api_version or "", provider.secret_ref, secrets)
+            adapters[provider.id] = AzureOpenAIAdapter(provider.id, provider.endpoint, provider.deployment or "", provider.secret_ref, secrets)
         elif provider.adapter == "openai":
             adapters[provider.id] = OpenAIAdapter(provider.id, provider.endpoint, provider.secret_ref, secrets)
     return adapters
 
 
-def build_dependencies(config: GatewayConfig, authenticator: Authenticator, adapters: dict[str, ProviderAdapter], audit: AuditSink) -> GatewayDependencies:
+def build_dependencies(config: GatewayConfig, authenticator: Authenticator, adapters: dict[str, ProviderAdapter], content_safety: ContentSafetyAuthorizer, audit: AuditSink) -> GatewayDependencies:
     router = ModelRouter(config)
     execution = SecureExecutionService(
         router,
         EntitlementAuthorizer(config),
         ConfigBillingAuthorizer(config),
+        content_safety,
         ResilientProviderExecutor(adapters, ResiliencePolicy()),
         audit,
     )
     return GatewayDependencies(router, authenticator, execution, audit)
 
 
-def create_server(host: str = "127.0.0.1", port: int = 8080) -> ThreadingHTTPServer:
+def create_server(host: str = "127.0.0.1", port: int = 8080, content_safety: ContentSafetyAuthorizer | None = None) -> ThreadingHTTPServer:
+    production = os.environ.get("UWO_ENVIRONMENT", "development").casefold() == "production"
+    if production and content_safety is None:
+        raise ConfigurationError("production content-safety integration is required before startup")
     config = load_config(CONFIG_PATH)
+    content_safety = content_safety or ConfigContentSafetyAuthorizer(config)
     secrets = EnvironmentSecretManager()
     authenticator = HmacBearerAuthenticator(secrets.get_secret("env://UWO_AUTH_SIGNING_KEY"))
-    GatewayHandler.dependencies = build_dependencies(config, authenticator, build_adapters(config, secrets), JsonAuditSink())
+    GatewayHandler.dependencies = build_dependencies(config, authenticator, build_adapters(config, secrets), content_safety, JsonAuditSink())
     return ThreadingHTTPServer((host, port), GatewayHandler)
 
 

@@ -24,6 +24,15 @@ def validate(root: Path = ROOT) -> list[str]:
             errors.append(f"provider {index} must use an env:// secret reference")
         if not str(provider.get("endpoint", "")).startswith("https://"):
             errors.append(f"provider {index} endpoint must use HTTPS")
+        if provider.get("adapter") == "azure-openai":
+            if not isinstance(provider.get("deployment"), str) or not provider["deployment"]:
+                errors.append(f"Azure provider {index} must define a deployment")
+            if "api_version" in provider:
+                errors.append(f"Azure provider {index} must use the v1 contract without api_version")
+    for tenant_id, policy in config.get("tenant_policies", {}).items():
+        content_safety = policy.get("content_safety") if isinstance(policy, dict) else None
+        if not isinstance(content_safety, dict) or content_safety.get("enabled") is not True:
+            errors.append(f"tenant {tenant_id!r} must enable the content-safety boundary")
     try:
         gitignore = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
     except OSError as exc:

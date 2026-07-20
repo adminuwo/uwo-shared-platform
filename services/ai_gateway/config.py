@@ -24,7 +24,6 @@ class Provider:
     endpoint: str
     secret_ref: str
     deployment: str | None = None
-    api_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +34,8 @@ class TenantPolicy:
     allowed_products: frozenset[Product]
     allowed_models: frozenset[str]
     billing_authorized: bool
+    content_safety_enabled: bool
+    content_safety_blocked_terms: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -69,7 +70,6 @@ def load_config(path: Path) -> GatewayConfig:
                 endpoint=item["endpoint"],
                 secret_ref=item["secret_ref"],
                 deployment=item.get("deployment"),
-                api_version=item.get("api_version"),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ConfigurationError(f"invalid provider at index {index}: {exc}") from exc
@@ -83,8 +83,8 @@ def load_config(path: Path) -> GatewayConfig:
         seen_priorities.add(provider.priority)
         if provider.adapter not in {"azure-openai", "openai"}:
             raise ConfigurationError(f"provider {provider.id!r} has unsupported adapter {provider.adapter!r}")
-        if provider.adapter == "azure-openai" and (not provider.deployment or not provider.api_version):
-            raise ConfigurationError(f"provider {provider.id!r} requires deployment and api_version")
+        if provider.adapter == "azure-openai" and not provider.deployment:
+            raise ConfigurationError(f"provider {provider.id!r} requires deployment")
         if not provider.endpoint.startswith("https://") or not provider.secret_ref.startswith("env://"):
             raise ConfigurationError(f"provider {provider.id!r} must use an HTTPS endpoint and env secret reference")
         providers.append(provider)
@@ -97,6 +97,12 @@ def load_config(path: Path) -> GatewayConfig:
         if not isinstance(tenant_id, str) or not tenant_id or not isinstance(item, dict):
             raise ConfigurationError("tenant policy identifiers and values must be valid")
         try:
+            content_safety = item.get("content_safety", {})
+            if not isinstance(content_safety, dict):
+                raise ConfigurationError("content_safety must be an object")
+            blocked_terms = content_safety.get("blocked_terms", [])
+            if not isinstance(blocked_terms, list) or not all(isinstance(term, str) and term for term in blocked_terms):
+                raise ConfigurationError("content_safety.blocked_terms must be a list of non-empty strings")
             policy = TenantPolicy(
                 allowed_providers=_required_strings(item.get("allowed_providers"), f"tenant_policies.{tenant_id}.allowed_providers"),
                 blocked_providers=frozenset(item.get("blocked_providers", [])),
@@ -104,6 +110,8 @@ def load_config(path: Path) -> GatewayConfig:
                 allowed_products=frozenset(Product(value) for value in _required_strings(item.get("allowed_products"), f"tenant_policies.{tenant_id}.allowed_products")),
                 allowed_models=_required_strings(item.get("allowed_models"), f"tenant_policies.{tenant_id}.allowed_models"),
                 billing_authorized=item.get("billing_authorized") is True,
+                content_safety_enabled=content_safety.get("enabled") is True,
+                content_safety_blocked_terms=tuple(blocked_terms),
             )
         except (TypeError, ValueError) as exc:
             raise ConfigurationError(f"invalid policy for tenant {tenant_id!r}: {exc}") from exc

@@ -7,9 +7,12 @@ from typing import Any, Mapping, Protocol
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool = False) -> None:
+    def __init__(self, message: str, *, retryable: bool = False, fallback_allowed: bool = True, code: str = "provider_error", provider_response_id: str | None = None) -> None:
         super().__init__(message)
         self.retryable = retryable
+        self.fallback_allowed = fallback_allowed
+        self.code = code
+        self.provider_response_id = provider_response_id
 
 
 class ProviderTimeout(ProviderError):

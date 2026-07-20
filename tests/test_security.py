@@ -14,7 +14,7 @@ class SecurityValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "infrastructure/config").mkdir(parents=True)
-            config = {"providers": [{"endpoint": "https://example.invalid", "secret_ref": "env://KEY", "api_key": "forbidden"}]}
+            config = {"providers": [{"adapter": "openai", "endpoint": "https://example.invalid", "secret_ref": "env://KEY", "api_key": "forbidden"}], "tenant_policies": {"tenant": {"content_safety": {"enabled": True}}}}
             (root / "infrastructure/config/ai-gateway.json").write_text(json.dumps(config))
             (root / ".gitignore").write_text(".env\n.env.*\n")
             errors = validate(root)

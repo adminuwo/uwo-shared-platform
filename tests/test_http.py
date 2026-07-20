@@ -3,13 +3,15 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 import threading
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from services.ai_gateway.app import GatewayHandler, build_dependencies
+from services.ai_gateway.app import GatewayHandler, build_dependencies, create_server
 from services.ai_gateway.audit import AuditEvent
 from services.ai_gateway.auth import HmacBearerAuthenticator, issue_test_token
-from services.ai_gateway.config import load_config
+from services.ai_gateway.config import ConfigurationError, load_config
+from services.ai_gateway.content_safety import ConfigContentSafetyAuthorizer
 from services.ai_gateway.providers import ProviderRequest, ProviderResponse
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,8 +21,12 @@ SIGNING_KEY = "test-signing-key-with-at-least-32-chars"
 class FakeAdapter:
     def __init__(self, provider_id: str) -> None:
         self.provider_id = provider_id
+        self.calls = 0
 
     def execute(self, request: ProviderRequest, timeout_seconds: float) -> ProviderResponse:
+        self.calls += 1
+        if request.prompt == "produce blocked output":
+            return ProviderResponse("provider-request-unsafe", "blocked-content from provider")
         return ProviderResponse("provider-request-1", "safe response")
 
 
@@ -37,8 +43,8 @@ class GatewayHttpTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         config = load_config(ROOT / "infrastructure/config/ai-gateway.json")
         cls.audit = CaptureAudit()
-        adapters = {provider.id: FakeAdapter(provider.id) for provider in config.providers}
-        GatewayHandler.dependencies = build_dependencies(config, HmacBearerAuthenticator(SIGNING_KEY, clock=lambda: 100), adapters, cls.audit)
+        cls.adapters = {provider.id: FakeAdapter(provider.id) for provider in config.providers}
+        GatewayHandler.dependencies = build_dependencies(config, HmacBearerAuthenticator(SIGNING_KEY, clock=lambda: 100), cls.adapters, ConfigContentSafetyAuthorizer(config), cls.audit)
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), GatewayHandler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -71,6 +77,11 @@ class GatewayHttpTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertEqual(payload["status"], "ok")
             self.assertEqual(response.headers["X-Request-ID"], payload["request_id"])
+
+    def test_production_startup_rejects_internal_content_safety_authorizer(self) -> None:
+        with patch.dict("os.environ", {"UWO_ENVIRONMENT": "production"}, clear=False):
+            with self.assertRaises(ConfigurationError):
+                create_server()
 
     def test_route_requires_authentication(self) -> None:
         request = Request(f"{self.base_url}/v1/route", data=json.dumps(self.body()).encode(), method="POST")
@@ -123,6 +134,24 @@ class GatewayHttpTests(unittest.TestCase):
         self.assertEqual(payload["output_text"], "safe response")
         serialized_events = json.dumps([event.__dict__ for event in self.audit.events])
         self.assertNotIn(body["prompt"], serialized_events)
+
+    def test_execute_denies_unsafe_input_before_provider_call(self) -> None:
+        body = self.body()
+        body["prompt"] = "contains blocked-content"
+        calls_before = sum(adapter.calls for adapter in self.adapters.values())
+        with self.assertRaises(HTTPError) as caught:
+            self.post("/v1/execute", body, request_id="req-unsafe-input")
+        self.assertEqual(caught.exception.code, 422)
+        self.assertEqual(json.load(caught.exception)["error"]["code"], "unsafe_input")
+        self.assertEqual(sum(adapter.calls for adapter in self.adapters.values()), calls_before)
+
+    def test_execute_denies_unsafe_provider_output(self) -> None:
+        body = self.body()
+        body["prompt"] = "produce blocked output"
+        with self.assertRaises(HTTPError) as caught:
+            self.post("/v1/execute", body, request_id="req-unsafe-output")
+        self.assertEqual(caught.exception.code, 422)
+        self.assertEqual(json.load(caught.exception)["error"]["code"], "unsafe_output")
 
 
 if __name__ == "__main__":

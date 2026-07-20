@@ -78,6 +78,18 @@ class ConfigurationTests(unittest.TestCase):
         with self.assertRaises(ConfigurationError):
             self.write_and_load(config)
 
+    def test_azure_provider_no_longer_requires_legacy_api_version(self) -> None:
+        config = self.altered_config()
+        self.assertNotIn("api_version", config["providers"][0])
+        loaded = self.write_and_load(config)
+        self.assertEqual(loaded.providers[0].deployment, "uwo-general-v1")
+
+    def test_invalid_content_safety_policy_is_rejected(self) -> None:
+        config = self.altered_config()
+        config["tenant_policies"]["tenant-demo-in"]["content_safety"]["blocked_terms"] = "not-a-list"
+        with self.assertRaises(ConfigurationError):
+            self.write_and_load(config)
+
 
 if __name__ == "__main__":
     unittest.main()

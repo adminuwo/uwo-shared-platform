@@ -49,6 +49,16 @@ class ResilienceTests(unittest.TestCase):
         self.assertIn("primary:circuit_open", caught.exception.failures)
         self.assertEqual(primary.calls, 1)
 
+    def test_terminal_provider_refusal_does_not_fallback(self) -> None:
+        refusal = ProviderError("refused", fallback_allowed=False, code="provider_refusal")
+        primary = SequenceAdapter("primary", [refusal])
+        fallback = SequenceAdapter("fallback", [RESPONSE])
+        executor = ResilientProviderExecutor({"primary": primary, "fallback": fallback}, self.policy(), sleep=lambda _: None)
+        with self.assertRaises(ProviderError) as caught:
+            executor.execute(("primary", "fallback"), REQUEST)
+        self.assertEqual(caught.exception.code, "provider_refusal")
+        self.assertEqual(fallback.calls, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

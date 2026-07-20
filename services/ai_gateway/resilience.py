@@ -88,8 +88,11 @@ class ResilientProviderExecutor:
                 try:
                     response = adapter.execute(request, self._policy.timeout_seconds)
                 except ProviderError as exc:
-                    self._failure(provider_id)
                     failures.append(f"{provider_id}:provider_error")
+                    if not exc.fallback_allowed:
+                        raise
+                    if exc.retryable:
+                        self._failure(provider_id)
                     if not exc.retryable or attempt == self._policy.max_attempts or not self._available(provider_id):
                         break
                     self._sleep(self._policy.retry_backoff_seconds * attempt)

@@ -16,9 +16,10 @@ Exit: repository checks pass and policy decisions are reproducible without provi
 - Model entitlement and billing/credit checks
 - Provider adapters, secret-manager integration, timeouts, retries, and circuit breakers
 - Structured, redacted audit events and correlation IDs
-- Content-safety service integration before external production traffic
+- Provider-neutral fail-closed pre-execution and post-execution content-safety gates
+- External content-safety service integration before production traffic
 
-Exit: controlled internal workloads can execute models with end-to-end auditability after deployment supplies managed secrets, trusted edge assertions, provider endpoints, and durable audit ingestion. External production traffic remains blocked pending content-safety and Phase 4 controls.
+Exit: controlled internal workloads can execute models with end-to-end auditability after deployment supplies managed secrets, trusted edge assertions, provider endpoints, and durable audit ingestion. External production startup remains blocked until a production content-safety authorizer replaces the included internal/test implementation and Phase 4 controls are satisfied.
 
 ## Phase 3 — Platform integration
 

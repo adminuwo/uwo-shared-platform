@@ -9,6 +9,7 @@ The gateway is deny-by-default: a tenant without an explicit policy cannot route
 - Store provider credentials in the deployment secret manager, rotate them, and keep them out of configuration, logs, and source control.
 - Encrypt transport with TLS 1.2 or newer and use private provider endpoints where available.
 - Treat prompts and outputs as tenant-confidential data. Do not log them. Apply tenant-scoped retention, deletion, and data-residency controls.
+- Require provider-neutral content-safety authorization before provider execution and again before provider output is returned. Missing or denied safety decisions fail closed.
 - Emit immutable audit events for policy decisions and provider invocations. The allowlisted event schema excludes prompts, outputs, bearer tokens, and credentials.
 - Apply request and prompt size limits, edge rate limits, provider timeouts, bounded retries, ordered fallback, and per-provider circuit breakers.
 - Pin CI actions to reviewed revisions before environments require SLSA provenance; enable dependency, secret, and code scanning.
@@ -20,9 +21,10 @@ The gateway is deny-by-default: a tenant without an explicit policy cannot route
 - Provider configuration contains only `env://` references. Deployment automation maps those names to secret-manager values; credentials must never be supplied in HTTP requests.
 - Request IDs are constrained to 128 safe characters and returned in `X-Request-ID`. They are correlation metadata, not authorization credentials.
 - Provider endpoints must use HTTPS. The committed `.example.invalid` endpoints cannot reach production services.
+- The configuration-backed content-safety authorizer is internal/test-only. Setting `UWO_ENVIRONMENT=production` blocks startup until a real production integration is supplied.
 
 ## Threat boundaries
 
-The execution endpoint can invoke providers only after all configured gates pass, but this repository does not deploy the service or contain real credentials. Durable audit storage, a live billing service, rate limiting, content-safety enforcement, asymmetric workload identity, provider-private networking, and production incident controls remain required before serving external traffic. These gaps are tracked in the roadmap.
+The execution endpoint can invoke providers only after all configured gates pass, but this repository does not deploy the service or contain real credentials. Durable audit storage, a live billing service, rate limiting, an external content-safety service, asymmetric workload identity, provider-private networking, and production incident controls remain required before serving external traffic. These gaps are tracked in the roadmap.
 
 Report vulnerabilities privately to the repository owners. Do not open public issues containing secrets or exploitable details.

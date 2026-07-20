@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from ..secrets import SecretManager
-from .base import JsonTransport, ProviderError, ProviderRequest, ProviderResponse
+from .base import JsonTransport, ProviderRequest, ProviderResponse
+from .responses import parse_responses_payload
 from .transport import UrllibJsonTransport
 
 
@@ -22,7 +23,4 @@ class OpenAIAdapter:
             {"model": request.model, "input": request.prompt, "store": False},
             timeout_seconds,
         )
-        try:
-            return ProviderResponse(provider_request_id=payload.get("id"), output_text=str(payload["output_text"]))
-        except (KeyError, TypeError) as exc:
-            raise ProviderError("OpenAI response omitted output_text") from exc
+        return parse_responses_payload(payload)
