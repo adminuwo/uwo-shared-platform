@@ -4,36 +4,66 @@
       "id": "azure-openai-in",
       "models": ["uwo-general-v1", "uwo-legal-v1"],
       "regions": ["in"],
-      "priority": 10
+      "priority": 10,
+      "adapter": "azure-openai",
+      "endpoint": "https://uwo-in.example.invalid",
+      "model_map": {
+        "uwo-general-v1": "azure-in-general-deployment",
+        "uwo-legal-v1": "azure-in-legal-deployment"
+      },
+      "secret_ref": "env://UWO_AZURE_OPENAI_IN_KEY"
     },
     {
-      "id": "aws-bedrock-in",
+      "id": "openai-in",
       "models": ["uwo-general-v1"],
       "regions": ["in"],
-      "priority": 20
+      "priority": 20,
+      "adapter": "openai",
+      "endpoint": "https://openai.example.invalid",
+      "model_map": {"uwo-general-v1": "openai-general-model-example"},
+      "secret_ref": "env://UWO_OPENAI_API_KEY"
     },
     {
       "id": "azure-openai-eu",
       "models": ["uwo-general-v1", "uwo-legal-v1"],
       "regions": ["eu"],
-      "priority": 30
+      "priority": 30,
+      "adapter": "azure-openai",
+      "endpoint": "https://uwo-eu.example.invalid",
+      "model_map": {
+        "uwo-general-v1": "azure-eu-general-deployment",
+        "uwo-legal-v1": "azure-eu-legal-deployment"
+      },
+      "secret_ref": "env://UWO_AZURE_OPENAI_EU_KEY"
     }
   ],
   "tenant_policies": {
     "tenant-demo-in": {
-      "allowed_providers": ["azure-openai-in", "aws-bedrock-in"],
+      "allowed_providers": ["azure-openai-in", "openai-in"],
       "blocked_providers": [],
-      "allowed_regions": ["in"]
+      "allowed_regions": ["in"],
+      "allowed_products": ["aisa", "ai-mall"],
+      "allowed_models": ["uwo-general-v1"],
+      "billing_authorized": true,
+      "content_safety": {"enabled": true, "blocked_terms": ["blocked-content"]}
     },
     "tenant-legal-eu": {
       "allowed_providers": ["azure-openai-eu"],
       "blocked_providers": [],
-      "allowed_regions": ["eu"]
+      "allowed_regions": ["eu"],
+      "allowed_products": ["ai-legal-professional"],
+      "allowed_models": ["uwo-legal-v1"],
+      "billing_authorized": true,
+      "content_safety": {"enabled": true, "blocked_terms": ["blocked-content"]}
     },
     "tenant-block-example": {
-      "allowed_providers": ["azure-openai-in", "aws-bedrock-in"],
+      "allowed_providers": ["azure-openai-in", "openai-in"],
       "blocked_providers": ["azure-openai-in"],
-      "allowed_regions": ["in"]
+      "allowed_regions": ["in"],
+      "allowed_products": ["aisa"],
+      "allowed_models": ["uwo-general-v1"],
+      "billing_authorized": false,
+      "content_safety": {"enabled": true, "blocked_terms": ["blocked-content"]}
     }
   }
 }

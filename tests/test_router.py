@@ -21,11 +21,11 @@ class ModelRouterTests(unittest.TestCase):
         second = self.router.route(self.request())
         self.assertEqual(first, second)
         self.assertEqual(first.provider, "azure-openai-in")
-        self.assertEqual(first.fallback, ("aws-bedrock-in",))
+        self.assertEqual(first.fallback, ("openai-in",))
 
     def test_block_policy_excludes_provider(self) -> None:
         result = self.router.route(self.request(tenant="tenant-block-example"))
-        self.assertEqual(result.provider, "aws-bedrock-in")
+        self.assertEqual(result.provider, "openai-in")
         self.assertEqual(result.fallback, ())
 
     def test_region_policy_is_enforced_before_provider_selection(self) -> None:
@@ -45,17 +45,70 @@ class ModelRouterTests(unittest.TestCase):
 
 
 class ConfigurationTests(unittest.TestCase):
-    def test_duplicate_provider_priority_is_rejected(self) -> None:
+    def altered_config(self):
+        import json
+
+        return json.loads((ROOT / "infrastructure/config/ai-gateway.json").read_text())
+
+    def write_and_load(self, config):
         import json
         import tempfile
 
-        config = json.loads((ROOT / "infrastructure/config/ai-gateway.json").read_text())
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "config.json"
+        path.write_text(json.dumps(config))
+        return load_config(path)
+
+    def test_duplicate_provider_priority_is_rejected(self) -> None:
+        config = self.altered_config()
         config["providers"][1]["priority"] = config["providers"][0]["priority"]
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "config.json"
-            path.write_text(json.dumps(config))
-            with self.assertRaises(ConfigurationError):
-                load_config(path)
+        with self.assertRaises(ConfigurationError):
+            self.write_and_load(config)
+
+    def test_duplicate_provider_id_is_rejected(self) -> None:
+        config = self.altered_config()
+        config["providers"][1]["id"] = config["providers"][0]["id"]
+        with self.assertRaises(ConfigurationError):
+            self.write_and_load(config)
+
+    def test_unknown_product_entitlement_is_rejected(self) -> None:
+        config = self.altered_config()
+        config["tenant_policies"]["tenant-demo-in"]["allowed_products"] = ["not-a-product"]
+        with self.assertRaises(ConfigurationError):
+            self.write_and_load(config)
+
+    def test_provider_model_maps_include_general_and_legal_aliases(self) -> None:
+        config = self.altered_config()
+        self.assertNotIn("api_version", config["providers"][0])
+        loaded = self.write_and_load(config)
+        azure = loaded.providers[0]
+        self.assertEqual(azure.model_map["uwo-general-v1"], "azure-in-general-deployment")
+        self.assertEqual(azure.model_map["uwo-legal-v1"], "azure-in-legal-deployment")
+
+    def test_missing_model_mapping_is_rejected(self) -> None:
+        config = self.altered_config()
+        del config["providers"][0]["model_map"]["uwo-legal-v1"]
+        with self.assertRaises(ConfigurationError):
+            self.write_and_load(config)
+
+    def test_undeclared_extra_model_mapping_is_rejected(self) -> None:
+        config = self.altered_config()
+        config["providers"][0]["model_map"]["undeclared-alias"] = "provider-model"
+        with self.assertRaises(ConfigurationError):
+            self.write_and_load(config)
+
+    def test_empty_provider_model_mapping_is_rejected(self) -> None:
+        config = self.altered_config()
+        config["providers"][0]["model_map"]["uwo-general-v1"] = ""
+        with self.assertRaises(ConfigurationError):
+            self.write_and_load(config)
+
+    def test_invalid_content_safety_policy_is_rejected(self) -> None:
+        config = self.altered_config()
+        config["tenant_policies"]["tenant-demo-in"]["content_safety"]["blocked_terms"] = "not-a-list"
+        with self.assertRaises(ConfigurationError):
+            self.write_and_load(config)
 
 
 if __name__ == "__main__":

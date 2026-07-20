@@ -1,6 +1,6 @@
 # Phased Implementation Roadmap
 
-## Phase 1 — Bootstrap foundation (this change)
+## Phase 1 — Bootstrap foundation (complete)
 
 - Canonical product and capability contracts
 - Tenant-aware deterministic model routing and ordered fallback
@@ -10,14 +10,16 @@
 
 Exit: repository checks pass and policy decisions are reproducible without provider credentials.
 
-## Phase 2 — Secure provider execution
+## Phase 2 — Secure provider execution (implemented foundation)
 
 - Edge authentication and tenant identity binding
 - Model entitlement and billing/credit checks
 - Provider adapters, secret-manager integration, timeouts, retries, and circuit breakers
-- Content-safety controls and structured, redacted audit events
+- Structured, redacted audit events and correlation IDs
+- Provider-neutral fail-closed pre-execution and post-execution content-safety gates
+- External content-safety service integration before production traffic
 
-Exit: controlled internal workloads can execute models with end-to-end auditability.
+Exit: controlled internal workloads can execute models with end-to-end auditability after deployment supplies managed secrets, trusted edge assertions, provider endpoints, and durable audit ingestion. External production startup remains blocked until a production content-safety authorizer replaces the included internal/test implementation and Phase 4 controls are satisfied.
 
 ## Phase 3 — Platform integration
 

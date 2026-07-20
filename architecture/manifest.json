@@ -8,8 +8,8 @@
       "id": "ai-gateway",
       "type": "service",
       "path": "services/ai_gateway",
-      "capabilities": ["ai-gateway-and-model-router", "security", "audit"],
-      "endpoints": ["GET /healthz", "POST /v1/route"]
+      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "billing-and-credits", "ai-gateway-and-model-router", "audit", "security", "connectors"],
+      "endpoints": ["GET /healthz", "POST /v1/route", "POST /v1/execute"]
     },
     {
       "id": "shared-contracts",

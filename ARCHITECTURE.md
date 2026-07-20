@@ -48,12 +48,17 @@ tooling/
 - `architecture/manifest.json`: machine-readable component ownership and capability mapping.
 - `tooling/validate_architecture.py`: manifest-to-contract and filesystem consistency validation.
 
-The AI Gateway filters providers by explicit tenant allowlist, blocklist, requested model, and allowed region. Unique provider priorities produce a stable primary and ordered fallback list. Unknown tenants or requests with no eligible provider fail closed. This bootstrap makes routing decisions only; provider invocation is deferred to the secure execution phase.
+The AI Gateway filters providers by explicit tenant allowlist, blocklist, requested model, and allowed region. Unique provider priorities produce a stable primary and ordered fallback list. Unknown tenants or requests with no eligible provider fail closed.
+
+Secure execution adds an authenticated edge assertion, verified tenant binding, product/model entitlements, billing authorization, and a provider-neutral input content-safety gate before provider selection. Public routing retains stable UWO model aliases; every provider declares an exact alias-to-provider `model_map`, resolved before secret access or transport. Provider adapters resolve credentials through a secret-manager contract only at execution time. Azure OpenAI and OpenAI Responses API scaffolds are wrapped by bounded timeouts, retry, fallback, and per-provider circuit breakers. Raw Responses JSON is parsed through a shared fail-closed contract, and output passes a second content-safety gate before release. Structured audit events contain allowlisted identifiers and decisions, never prompts, outputs, bearer tokens, or credential values.
 
 ## API Boundaries
 
 - `GET /healthz` returns process health.
-- `POST /v1/route` validates a tenant, product, model, and region and returns a deterministic routing plan.
+- `POST /v1/route` authenticates and authorizes a tenant, product, model, and region and returns a deterministic routing plan.
+- `POST /v1/execute` applies authentication, entitlement, billing, and routing policy before invoking a provider adapter.
+
+Every response carries `X-Request-ID`. Callers may provide a constrained request ID or allow the gateway to generate one.
 
 ## Architecture Governance
 
