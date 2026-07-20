@@ -1,0 +1,18 @@
+# ADR 0002: Secure provider execution boundary
+
+- Status: Accepted
+- Date: 2026-07-20
+
+## Context
+
+Phase 1 returned deterministic routing plans but intentionally did not authenticate callers or invoke providers. Controlled internal execution requires a verifiable tenant identity, authorization gates, credential isolation, bounded provider failure behavior, and audit records that do not leak tenant content.
+
+## Decision
+
+Require short-lived, issuer- and audience-bound HMAC-signed bearer assertions at every non-health HTTP boundary and bind the verified tenant claim to the request tenant. Check product/model entitlements and billing authorization before deterministic routing. Invoke providers only through a provider-neutral adapter contract that obtains credentials from a secret-manager abstraction.
+
+Wrap adapters with explicit per-attempt timeouts, bounded retry, ordered provider fallback, and per-provider circuit breakers. Correlate HTTP responses, provider requests, and structured audit events with a constrained request ID. Audit events use an allowlist schema that cannot contain prompts, model outputs, bearer tokens, or secret values.
+
+## Consequences
+
+Authorization and credential handling are testable without live providers, failures remain bounded, and provider-specific code is isolated. Runtime startup fails if the authentication secret is absent. HMAC assertions, environment-backed secret resolution, configuration-backed billing, and stdout JSON audit are internal bootstrap implementations; production environments must replace or integrate them with workload identity, managed secrets, the billing service, and durable audit ingestion.
