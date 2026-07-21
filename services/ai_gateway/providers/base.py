@@ -42,6 +42,10 @@ class ProviderRequest:
 class ProviderResponse:
     provider_request_id: str | None
     output_text: str
+    provider_model_id: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
 
 
 class JsonTransport(Protocol):

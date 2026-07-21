@@ -61,6 +61,23 @@ def validate(root: Path = ROOT) -> list[str]:
             present = audit_fields & forbidden_audit_fields
             if present:
                 errors.append(f"control-plane audit schema contains sensitive fields: {sorted(present)}")
+    billing = root / "services/platform_billing"
+    if billing.is_dir():
+        app_source = (billing / "app.py").read_text(encoding="utf-8")
+        if "from .in_memory" in app_source or "InMemoryBilling" in app_source:
+            errors.append("billing HTTP startup must not instantiate test-only in-memory repositories")
+        contracts_source = (root / "packages/contracts/billing.py").read_text(encoding="utf-8")
+        forbidden_usage_fields = {"prompt", "model_output", "bearer_token", "api_key", "provider_secret", "request_body"}
+        if any(f"    {name}:" in contracts_source for name in forbidden_usage_fields):
+            errors.append("billing contracts contain a forbidden sensitive-data field")
+        if root == ROOT:
+            from services.platform_billing.audit import BillingAuditEvent
+
+            audit_fields = {item.name for item in fields(BillingAuditEvent)}
+            forbidden_audit_fields = {"authorization", "bearer_token", "prompt", "output", "request_body", "secret", "secret_value"}
+            present = audit_fields & forbidden_audit_fields
+            if present:
+                errors.append(f"billing audit schema contains sensitive fields: {sorted(present)}")
     return errors
 
 

@@ -24,12 +24,15 @@ Exit: controlled internal workloads can execute models with end-to-end auditabil
 ## Phase 3 — Platform integration
 
 - Phase 3A foundation: versioned identity/tenancy contracts; isolated administration; rollback-safe UnitOfWork repositories; immutable-result idempotency ledger; subject-directory revalidation; canonical immutable policies; optimistic concurrency; and redacted audit/error boundaries
+- Phase 3B foundation: schema-versioned billing and usage contracts; integer credit microunits; append-only ledger; reservation/capture/release lifecycle; immutable example rate-card versions; transactional and idempotent financial mutations; tenant-isolated billing APIs; and AI Gateway billing lifecycle integration
 - Durable identity directory and control-plane repositories, policy promotion, and workload-identity integration
-- Billing, storage, notification, analytics, and durable audit services
+- Durable billing and identity repositories, reservation expiry/reconciliation workers, rate-card approval, storage, notification, analytics, and durable audit services
 - Tenant administration API and policy promotion workflow
 - OpenTelemetry traces, metrics, SLOs, alerting, and operational runbooks
 
 Exit: all named UWO products can integrate through versioned contracts and platform SLOs.
+
+Phase 3B exit: all local validation passes without credentials or live providers; insufficient balances deny execution, successful safe usage captures once, failures release credit, and retries cannot duplicate charges. Production billing remains blocked on durable transactional storage, workload identity, reconciliation, approved pricing governance, immutable audit ingestion, and operational controls.
 
 ## Phase 4 — Regional production readiness
 

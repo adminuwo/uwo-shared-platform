@@ -113,6 +113,9 @@ class Permission(str, Enum):
     ENTITLEMENT_READ = "entitlement.read"
     ENTITLEMENT_MANAGE = "entitlement.manage"
     POLICY_READ = "policy.read"
+    BILLING_READ = "billing.read"
+    BILLING_MANAGE = "billing.manage"
+    BILLING_EXECUTE = "billing.execute"
 
 
 @dataclass(frozen=True)

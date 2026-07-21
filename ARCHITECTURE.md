@@ -45,6 +45,7 @@ tooling/
 - `packages/contracts`: canonical product and capability identifiers.
 - `services/ai_gateway`: pure routing policy plus HTTP health and route boundaries.
 - `services/platform_control_plane`: isolated identity, tenant, role, and entitlement administration boundaries.
+- `services/platform_billing`: isolated billing-account, credit, reservation, usage, rate-card, and ledger boundaries.
 - `infrastructure/config`: reviewed provider catalog and tenant policies.
 - `architecture/manifest.json`: machine-readable component ownership and capability mapping.
 - `tooling/validate_architecture.py`: manifest-to-contract and filesystem consistency validation.
@@ -61,6 +62,14 @@ Aggregate versions reject stale writes. A provider-neutral UnitOfWork makes tena
 
 Policy configuration is deeply immutable canonical JSON with deterministic serialization and fingerprints. Tenant lifecycle remains exclusively authoritative in `Tenant.status`; policy bodies do not mirror operational status. Success and transaction-rollback auditing belongs to the application service, while the HTTP boundary owns exactly one authentication/authorization/resource-denial event and returns redacted `internal_error` responses for unexpected persistence failures.
 
+Phase 3B keeps billing lifecycle out of both the AI Gateway and tenant control-plane handlers. Canonical contracts use integer credit microunits and integer usage quantities only. The platform billing application service coordinates injected account, ledger, reservation, usage, rate-card, and scoped-idempotency repositories behind a provider-neutral UnitOfWork. Committed in-memory repositories are thread-safe, rollback-capable test integrations and are never selected by executable startup.
+
+The credit ledger is immutable and append-only. Entries contain available and reserved deltas, and balances are reproducible from entry order. Optimistic ledger sequence versions serialize all financial mutations and reject stale concurrent reservations before either balance becomes negative. Captured plus released credit cannot exceed a reservation. Active or partially captured reservations can capture usage; any remaining credit can be released. Expired capture requires an explicit audited platform-administrator override.
+
+Rate cards are immutable versions keyed by product, shared UWO model alias, provider, and region. Rates use integer microunits per 1,000 tokens. Input and output components independently round toward positive infinity, and an integer fixed request charge is added. Every usage event binds to one exact version, preserving historical calculations after later rate-card changes. Repository example pricing is test-only.
+
+The Gateway consumes a provider-neutral authorize/reserve/capture/release interface. Reservation occurs after input safety and routing authorization but before provider transport. Successful output passes the post-execution safety gate before token usage is captured; unused credit is released. Provider failure or output-safety denial releases the reservation. The usage schema carries only allowlisted identifiers, region, integer token counts, rate-card version, and charge, never prompts or outputs.
+
 ## API Boundaries
 
 - `GET /healthz` returns process health.
@@ -68,8 +77,10 @@ Policy configuration is deeply immutable canonical JSON with deterministic seria
 - `POST /v1/execute` applies authentication, entitlement, billing, and routing policy before invoking a provider adapter.
 - `GET /healthz` on the platform control plane returns process health without exposing tenant data.
 - `/v1/tenants` and tenant-scoped `/v1` subresources provide authenticated tenant lifecycle, membership, role, permission, entitlement, and policy-version administration.
+- `/v1/billing/accounts` and tenant-scoped billing subresources provide authenticated account lifecycle, balances, grants, adjustments, refunds, usage, ledger, and rate-card reads.
+- `/v1/billing/reservations` provides authenticated internal reserve, capture, and release operations for explicitly trusted executors.
 
-Every service response carries `X-Request-ID`. Callers may provide a constrained request ID or allow the service to generate one. Control-plane list responses use bounded `limit` and continuation-cursor fields.
+Every service response carries `X-Request-ID`. Callers may provide a constrained request ID or allow the service to generate one. Control-plane and billing list responses use bounded `limit` and continuation-cursor fields. Billing mutations require an `Idempotency-Key` and explicit optimistic versions.
 
 ## Architecture Governance
 

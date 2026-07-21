@@ -54,6 +54,13 @@ class ProviderAdapterTests(unittest.TestCase):
         self.assertEqual(response.output_text, "normal result")
         self.assertEqual(response.provider_request_id, "resp_preserved")
 
+    def test_provider_usage_and_resolved_model_are_propagated_for_billing(self) -> None:
+        raw = raw_response(message(output_text("normal result")))
+        raw["usage"] = {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15}
+        response = self.openai(raw).execute(self.request, 3)
+        self.assertEqual((response.input_tokens, response.output_tokens, response.total_tokens), (12, 3, 15))
+        self.assertEqual(response.provider_model_id, "provider-general-model")
+
     def test_multiple_output_text_elements_and_messages_are_aggregated(self) -> None:
         raw = raw_response(
             {"id": "reasoning_1", "type": "reasoning", "summary": []},

@@ -9,11 +9,12 @@ from packages.contracts import Product
 from .audit import AuditSink, audit_event
 from .auth import VerifiedIdentity
 from .authorization import EntitlementAuthorizer
-from .billing import BillingAuthorizer
+from .billing import AuthorizationOnlyGatewayBilling, BillingAuthorizer
 from .content_safety import ContentSafetyAuthorizer
 from .providers import ProviderRequest
 from .resilience import ResilientProviderExecutor
 from .router import ModelRouter, RouteRequest
+from services.platform_billing.gateway import GatewayBilling
 
 
 @dataclass(frozen=True)
@@ -37,13 +38,14 @@ class SecureExecutionResult:
 
 
 class SecureExecutionService:
-    def __init__(self, router: ModelRouter, entitlements: EntitlementAuthorizer, billing: BillingAuthorizer, content_safety: ContentSafetyAuthorizer, providers: ResilientProviderExecutor, audit: AuditSink) -> None:
+    def __init__(self, router: ModelRouter, entitlements: EntitlementAuthorizer, billing: BillingAuthorizer, content_safety: ContentSafetyAuthorizer, providers: ResilientProviderExecutor, audit: AuditSink, gateway_billing: GatewayBilling | None = None) -> None:
         self._router = router
         self._entitlements = entitlements
         self._billing = billing
         self._content_safety = content_safety
         self._providers = providers
         self._audit = audit
+        self._gateway_billing = gateway_billing or AuthorizationOnlyGatewayBilling(billing)
 
     def authorize_route(self, identity: VerifiedIdentity, request: RouteRequest, request_id: str) -> None:
         self._entitlements.authorize(identity, request.tenant_id, request.product, request.model)
@@ -51,15 +53,30 @@ class SecureExecutionService:
 
     def execute(self, identity: VerifiedIdentity, request: SecureExecutionRequest) -> SecureExecutionResult:
         self._entitlements.authorize(identity, request.tenant_id, request.product, request.model)
-        self._billing.authorize(identity.tenant_id, request.product, request.model, request.request_id)
+        self._gateway_billing.authorize_estimated_charge(identity.tenant_id, request.product, request.model, request.request_id)
         self._content_safety.authorize_input(identity.tenant_id, request.product, request.model, request.prompt, request.request_id)
         route = self._router.route(RouteRequest(request.tenant_id, request.product, request.model, request.region))
+        reservation = self._gateway_billing.reserve(identity.tenant_id, request.product, request.model, request.request_id)
         self._audit.emit(audit_event("provider.execution", request.request_id, "started", tenant_id=identity.tenant_id, subject=identity.subject, product=request.product.value, model=request.model, provider=route.provider))
-        result = self._providers.execute(
-            (route.provider,) + route.fallback,
-            ProviderRequest(request.request_id, identity.tenant_id, request.model, request.prompt),
+        try:
+            result = self._providers.execute(
+                (route.provider,) + route.fallback,
+                ProviderRequest(request.request_id, identity.tenant_id, request.model, request.prompt),
+            )
+            self._content_safety.authorize_output(identity.tenant_id, request.product, request.model, result.response.output_text, request.request_id)
+        except Exception:
+            self._gateway_billing.release_on_failure(reservation)
+            raise
+        self._gateway_billing.capture(
+            reservation,
+            result.provider_id,
+            result.response.provider_model_id,
+            request.region,
+            result.response.provider_request_id,
+            result.response.input_tokens,
+            result.response.output_tokens,
+            result.response.total_tokens,
         )
-        self._content_safety.authorize_output(identity.tenant_id, request.product, request.model, result.response.output_text, request.request_id)
         self._audit.emit(audit_event("provider.execution", request.request_id, "succeeded", tenant_id=identity.tenant_id, subject=identity.subject, product=request.product.value, model=request.model, provider=result.provider_id))
         return SecureExecutionResult(
             request_id=request.request_id,

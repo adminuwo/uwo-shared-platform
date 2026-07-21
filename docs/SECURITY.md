@@ -45,4 +45,21 @@ The execution endpoint can invoke providers only after all configured gates pass
 
 Phase 3A does not add production persistence, credentials, or deployment infrastructure. Before production use, integrate workload identity, a durable identity directory and repositories, encrypted regional storage, immutable audit ingestion, rate limiting, policy promotion approval, and recovery controls.
 
+## Billing, credit, and usage controls
+
+- Keep billing lifecycle in `services/platform_billing`; AI Gateway and tenant-control handlers consume application contracts and never reach billing repositories directly.
+- Represent credit, rates, charges, token counts, and usage quantities as integers. One credit is 1,000,000 microunits. Reject floating-point financial input, negative usage, unknown price dimensions, stale versions, and any mutation that would make available or reserved balances negative.
+- Treat the ledger as immutable and append-only. Every balance mutation appends one versioned entry; there are no update or delete repository operations. Captured plus released amounts cannot exceed the original reservation.
+- Reserve before provider transport, capture only after provider output passes content safety, release unused credit after final capture, and release the full reservation on provider or output-safety failure. Expired capture requires an explicit, audited platform-administrator override.
+- Bind usage to the immutable rate-card ID and version used for calculation. Example repository prices are not commercial prices. Production rate cards require approval, signing/promotion, effective-time controls, and reconciliation.
+- Scope idempotency records by operation, tenant, actor, and key. Store immutable original operation results. Exact retries must not add ledger entries, usage events, or successful audit events; conflicting reuse returns `409`.
+- Execute each grant, reservation, capture, release, refund, and its associated ledger/usage/idempotency records in one transaction. Roll back every participant and emit one redacted transaction-failure event on repository failure.
+- Grant account and credit mutation only to explicitly configured, directory-revalidated platform administrators. Tenant members require `billing.read` and remain tenant-bound. Reserve/capture/release authority belongs only to explicit trusted internal executor subjects that are revalidated against the subject directory.
+- Unknown tenants, suspended tenants, insufficient balances, cross-tenant access, suspended billing accounts, and closed-account debit attempts fail closed. Caller-supplied tenant IDs are resource selectors, never authority.
+- Billing usage and audit schemas may retain tenant, product, shared model alias, provider/model identifiers where allowed, region, request/provider correlation IDs, integer token counts, rate-card version, and calculated charge. They must never retain prompts, model output, bearer tokens, API keys, provider secrets, request bodies, authentication material, or payment credentials.
+- The HTTP boundary enforces 65,536-byte bodies, bounded request and idempotency identifiers, explicit status codes, pagination limits, `no-store`, correlation headers, one denial event per denied request, and generic `500 internal_error` responses without exception or repository detail.
+- Never start production with the committed in-memory repositories, in-process billing adapter, example price data, or JSON stdout audit sink. Production requires regional durable transactions, encrypted storage, workload identity, immutable audit ingestion, reconciliation, expiration processing, monitoring, backup/recovery, and an approved rate-card promotion process.
+
+Phase 3B adds no credentials, payment gateway, production database, or deployment infrastructure.
+
 Report vulnerabilities privately to the repository owners. Do not open public issues containing secrets or exploitable details.
