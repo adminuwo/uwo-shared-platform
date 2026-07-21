@@ -25,3 +25,7 @@ class StaleVersion(Conflict):
 
 class InvalidRequest(ControlPlaneError):
     pass
+
+
+class RepositoryIntegrityError(RuntimeError):
+    """Unexpected persistence failure that must not be exposed to callers."""

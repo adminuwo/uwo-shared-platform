@@ -13,6 +13,9 @@ from .domain import (
     TenantMembership,
     TenantStatus,
     VerifiedSubjectIdentity,
+    canonical_json,
+    freeze_json,
+    thaw_json,
     utc_now,
 )
 
@@ -32,5 +35,8 @@ __all__ = [
     "TenantMembership",
     "TenantStatus",
     "VerifiedSubjectIdentity",
+    "canonical_json",
+    "freeze_json",
+    "thaw_json",
     "utc_now",
 ]

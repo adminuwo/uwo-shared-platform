@@ -5,13 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+import hashlib
+import json
+import math
 import re
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from .catalog import Product
 
 SCHEMA_VERSION = "1"
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@-]{0,255}$")
+
+
+class _FrozenJsonArray(tuple):
+    """Internal immutable representation of an accepted JSON array."""
 
 
 def utc_now() -> str:
@@ -48,6 +56,43 @@ def _validate_contract(schema_version: str, identifiers: Mapping[str, str], time
         _require_utc(value, name)
     if version is not None and (not isinstance(version, int) or isinstance(version, bool) or version < 1):
         raise ValueError("version must be a positive integer")
+
+
+def freeze_json(value: Any, path: str = "$") -> Any:
+    """Validate and deeply freeze a JSON-compatible value deterministically."""
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{path} contains a non-finite number")
+        return value
+    if isinstance(value, Mapping):
+        if not all(isinstance(key, str) for key in value):
+            raise ValueError(f"{path} contains a non-string object key")
+        return MappingProxyType({key: freeze_json(value[key], f"{path}.{key}") for key in sorted(value)})
+    if isinstance(value, _FrozenJsonArray):
+        return value
+    if isinstance(value, list):
+        return _FrozenJsonArray(freeze_json(item, f"{path}[{index}]") for index, item in enumerate(value))
+    raise ValueError(f"{path} contains an unsupported JSON value")
+
+
+def thaw_json(value: Any) -> Any:
+    """Convert a frozen JSON value into ordinary serialization primitives."""
+
+    if isinstance(value, Mapping):
+        return {key: thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [thaw_json(item) for item in value]
+    return value
+
+
+def canonical_json(value: Any) -> str:
+    """Serialize a JSON value with stable ordering and no non-finite numbers."""
+
+    frozen = freeze_json(value)
+    return json.dumps(thaw_json(frozen), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
 
 
 class TenantStatus(str, Enum):
@@ -215,3 +260,10 @@ class PolicyDocument:
         )
         if not isinstance(self.policy, Mapping):
             raise ValueError("policy must be an object")
+        object.__setattr__(self, "policy", freeze_json(self.policy))
+
+    def canonical_policy(self) -> str:
+        return canonical_json(self.policy)
+
+    def policy_fingerprint(self) -> str:
+        return hashlib.sha256(self.canonical_policy().encode("utf-8")).hexdigest()

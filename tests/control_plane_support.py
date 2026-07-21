@@ -5,11 +5,14 @@ from services.platform_control_plane.audit import ControlPlaneAuditEvent
 from services.platform_control_plane.auth import AuthenticationError
 from services.platform_control_plane.authorization import ControlPlaneAuthorizer, StaticSubjectDirectory
 from services.platform_control_plane.in_memory import (
+    FailureInjector,
     InMemoryEntitlementRepository,
+    InMemoryIdempotencyRepository,
     InMemoryMembershipRepository,
     InMemoryPolicyVersionRepository,
     InMemoryRoleRepository,
     InMemoryTenantRepository,
+    InMemoryUnitOfWorkFactory,
 )
 from services.platform_control_plane.service import PlatformControlPlane, built_in_roles
 
@@ -52,29 +55,37 @@ class ControlPlaneFixture:
     roles: InMemoryRoleRepository
     entitlements: InMemoryEntitlementRepository
     policies: InMemoryPolicyVersionRepository
+    idempotency: InMemoryIdempotencyRepository
+    subjects: StaticSubjectDirectory
+    failures: FailureInjector
     audit: CaptureAudit
 
 
 def make_fixture() -> ControlPlaneFixture:
-    tenants = InMemoryTenantRepository()
+    failures = FailureInjector()
+    tenants = InMemoryTenantRepository(failures)
     memberships = InMemoryMembershipRepository()
     roles = InMemoryRoleRepository(built_in_roles(NOW))
-    entitlements = InMemoryEntitlementRepository()
-    policies = InMemoryPolicyVersionRepository()
+    entitlements = InMemoryEntitlementRepository(failures)
+    policies = InMemoryPolicyVersionRepository(failures)
+    idempotency = InMemoryIdempotencyRepository(failures)
+    subjects = StaticSubjectDirectory(frozenset({PLATFORM.subject, ADMIN_A.subject, ADMIN_B.subject, USER_A.subject}))
     audit = CaptureAudit()
-    authorizer = ControlPlaneAuthorizer(tenants, memberships, roles, frozenset({PLATFORM.subject}))
+    authorizer = ControlPlaneAuthorizer(tenants, memberships, roles, subjects, frozenset({PLATFORM.subject}))
+    unit_of_work = InMemoryUnitOfWorkFactory(tenants, memberships, roles, entitlements, policies, idempotency)
     service = PlatformControlPlane(
         tenants,
         memberships,
         roles,
         entitlements,
         policies,
-        StaticSubjectDirectory(frozenset({PLATFORM.subject, ADMIN_A.subject, ADMIN_B.subject, USER_A.subject})),
+        unit_of_work,
+        subjects,
         authorizer,
         audit,
         clock=lambda: NOW,
     )
-    return ControlPlaneFixture(service, tenants, memberships, roles, entitlements, policies, audit)
+    return ControlPlaneFixture(service, tenants, memberships, roles, entitlements, policies, idempotency, subjects, failures, audit)
 
 
 def bootstrap_tenant_admin(fixture: ControlPlaneFixture, tenant_id: str, admin: VerifiedSubjectIdentity) -> None:

@@ -18,10 +18,16 @@ class StaticSubjectDirectory:
     """Explicit subject catalog for tests and controlled internal integration."""
 
     def __init__(self, subjects: frozenset[str]) -> None:
-        self._subjects = subjects
+        self._subjects = set(subjects)
 
     def exists(self, subject: str) -> bool:
         return subject in self._subjects
+
+    def deprovision(self, subject: str) -> None:
+        self._subjects.discard(subject)
+
+    def provision(self, subject: str) -> None:
+        self._subjects.add(subject)
 
 
 class ControlPlaneAuthorizer:
@@ -30,17 +36,21 @@ class ControlPlaneAuthorizer:
         tenants: TenantRepository,
         memberships: MembershipRepository,
         roles: RoleRepository,
+        subjects: SubjectDirectory,
         platform_admin_subjects: frozenset[str],
     ) -> None:
         self._tenants = tenants
         self._memberships = memberships
         self._roles = roles
+        self._subjects = subjects
         self._platform_admin_subjects = platform_admin_subjects
 
     def is_platform_admin(self, identity: VerifiedSubjectIdentity) -> bool:
         return identity.subject in self._platform_admin_subjects
 
     def require_platform_admin(self, identity: VerifiedSubjectIdentity) -> None:
+        if not self._subjects.exists(identity.subject):
+            raise AuthorizationDenied("deprovisioned_subject", "subject is no longer active in the identity directory")
         if not self.is_platform_admin(identity):
             raise AuthorizationDenied("platform_admin_required", "platform administrator authorization is required")
 
@@ -53,6 +63,8 @@ class ControlPlaneAuthorizer:
         membership = self._memberships.get(tenant_id, subject)
         if membership is None:
             raise AuthorizationDenied("unknown_subject", "subject has no tenant membership")
+        if not self._subjects.exists(subject):
+            raise AuthorizationDenied("deprovisioned_subject", "subject is no longer active in the identity directory")
         if membership.status is not MembershipStatus.ACTIVE:
             raise AuthorizationDenied("membership_inactive", "subject membership is not active")
         permissions: set[str] = set()
@@ -70,6 +82,7 @@ class ControlPlaneAuthorizer:
         if tenant.status is TenantStatus.SUSPENDED and not allow_suspended:
             raise AuthorizationDenied("tenant_suspended", "suspended tenants cannot perform administration")
         if self.is_platform_admin(identity):
+            self.require_platform_admin(identity)
             return
         if identity.tenant_id != tenant_id:
             raise AuthorizationDenied("tenant_isolation_violation", "administrator cannot access another tenant")

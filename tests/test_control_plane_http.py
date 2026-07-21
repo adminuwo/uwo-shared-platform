@@ -4,6 +4,7 @@ import json
 from http.server import ThreadingHTTPServer
 import threading
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -28,13 +29,13 @@ class PlatformControlPlaneHttpTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join()
 
-    def request(self, method: str, path: str, body: dict | bytes | None = None, token: str = "platform", idempotency_key: str | None = None):
+    def request(self, method: str, path: str, body: dict | bytes | None = None, token: str = "platform", idempotency_key: str | None = None, request_id: str = "req-http-test"):
         data = None
         if isinstance(body, dict):
             data = json.dumps(body).encode()
         elif isinstance(body, bytes):
             data = body
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "X-Request-ID": "req-http-test"}
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "X-Request-ID": request_id}
         if idempotency_key is not None:
             headers["Idempotency-Key"] = idempotency_key
         return urlopen(Request(f"{self.base_url}{path}", data=data, headers=headers, method=method))
@@ -92,6 +93,57 @@ class PlatformControlPlaneHttpTests(unittest.TestCase):
             self.request("GET", "/v1/tenants/tenant-isolated-http", token="admin-a")
         self.assertEqual(caught.exception.code, 403)
         self.assertEqual(json.load(caught.exception)["error"]["code"], "tenant_isolation_violation")
+
+    def test_denied_request_emits_exactly_one_redacted_audit_event(self) -> None:
+        tenant_id = "tenant-denial-audit"
+        self.fixture.service.create_tenant(PLATFORM, tenant_id, "Denial Audit", "in", "create-denial-audit", "req-create-denial")
+        request_id = "req-single-denial"
+        with self.assertRaises(HTTPError) as caught:
+            self.request("GET", f"/v1/tenants/{tenant_id}", token="admin-a", request_id=request_id)
+        self.assertEqual(caught.exception.code, 403)
+        events = [event for event in self.fixture.audit.events if event.request_id == request_id and event.event_type == "administration.denied"]
+        self.assertEqual(len(events), 1)
+        serialized = json.dumps([event.__dict__ for event in events])
+        self.assertNotIn("Bearer admin-a", serialized)
+
+    def test_idempotency_conflict_returns_409(self) -> None:
+        tenant_id = "tenant-idempotency-http"
+        body = {"tenant_id": tenant_id, "name": "Original", "region": "in"}
+        with self.request("POST", "/v1/tenants", body, idempotency_key="http-conflict") as response:
+            self.assertEqual(response.status, 201)
+        body["name"] = "Changed"
+        with self.assertRaises(HTTPError) as caught:
+            self.request("POST", "/v1/tenants", body, idempotency_key="http-conflict")
+        self.assertEqual(caught.exception.code, 409)
+        self.assertEqual(json.load(caught.exception)["error"]["code"], "idempotency_conflict")
+
+    def test_stale_version_and_unknown_resource_status_codes(self) -> None:
+        tenant_id = "tenant-status-http"
+        body = {"tenant_id": tenant_id, "name": "Status Tenant", "region": "in"}
+        with self.request("POST", "/v1/tenants", body, idempotency_key="status-http"):
+            pass
+        with self.assertRaises(HTTPError) as stale:
+            self.request("POST", f"/v1/tenants/{tenant_id}/status", {"status": "suspended", "expected_version": 99})
+        self.assertEqual(stale.exception.code, 409)
+        self.assertEqual(json.load(stale.exception)["error"]["code"], "stale_version")
+        with self.assertRaises(HTTPError) as missing:
+            self.request("GET", "/v1/tenants/unknown-http-tenant")
+        self.assertEqual(missing.exception.code, 404)
+        self.assertEqual(json.load(missing.exception)["error"]["code"], "unknown_tenant")
+
+    def test_unexpected_repository_error_is_redacted_internal_error(self) -> None:
+        sensitive_detail = "sensitive-repository-detail-must-not-leak"
+        request_id = "req-internal-error"
+        with patch.object(self.fixture.tenants, "get", side_effect=RuntimeError(sensitive_detail)):
+            with self.assertRaises(HTTPError) as caught:
+                self.request("GET", "/v1/tenants/tenant-a", request_id=request_id)
+        self.assertEqual(caught.exception.code, 500)
+        payload = json.load(caught.exception)
+        self.assertEqual(payload["error"], {"code": "internal_error", "message": "an internal error occurred"})
+        self.assertNotIn(sensitive_detail, json.dumps(payload))
+        events = [event for event in self.fixture.audit.events if event.request_id == request_id]
+        self.assertEqual(len(events), 1)
+        self.assertNotIn(sensitive_detail, json.dumps([event.__dict__ for event in events]))
 
     def test_malformed_and_oversized_requests_are_rejected(self) -> None:
         with self.assertRaises(HTTPError) as malformed:

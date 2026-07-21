@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,7 +16,7 @@ from packages.contracts import MembershipStatus, Product, TenantStatus, Verified
 
 from .audit import AuditSink, audit_event
 from .auth import AuthenticationError, Authenticator
-from .errors import AuthorizationDenied, Conflict, ControlPlaneError, InvalidRequest, ResourceNotFound, StaleVersion
+from .errors import AuthorizationDenied, Conflict, InvalidRequest, ResourceNotFound
 from .service import PlatformControlPlane
 
 REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -36,7 +36,7 @@ class RequestTooLarge(InvalidRequest):
 
 def _json_value(value: Any) -> Any:
     if is_dataclass(value):
-        return _json_value(asdict(value))
+        return {item.name: _json_value(getattr(value, item.name)) for item in fields(value)}
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, Mapping):
@@ -107,6 +107,13 @@ def _handler(dependencies: ControlPlaneDependencies) -> type[BaseHTTPRequestHand
         def _identity(self) -> VerifiedSubjectIdentity:
             return dependencies.authenticator.authenticate(self.headers.get("Authorization", ""))
 
+        @staticmethod
+        def _enum(enum_type: Any, value: Any, field_name: str) -> Any:
+            try:
+                return enum_type(value)
+            except (TypeError, ValueError) as exc:
+                raise InvalidRequest("invalid_request", f"{field_name} is invalid") from exc
+
         def _route(self, method: str) -> None:
             request_id = self._request_id()
             parsed = urlsplit(self.path)
@@ -126,6 +133,7 @@ def _handler(dependencies: ControlPlaneDependencies) -> type[BaseHTTPRequestHand
                 self._error(HTTPStatus.UNAUTHORIZED, exc.code, str(exc), request_id)
                 return
             except AuthorizationDenied as exc:
+                dependencies.audit.emit(audit_event("administration.denied", request_id, "denied", actor_subject=identity.subject if identity else None, reason_code=exc.code))
                 self._error(HTTPStatus.FORBIDDEN, exc.code, str(exc), request_id)
                 return
             except ResourceNotFound as exc:
@@ -135,12 +143,15 @@ def _handler(dependencies: ControlPlaneDependencies) -> type[BaseHTTPRequestHand
             except RequestTooLarge as exc:
                 self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, exc.code, str(exc), request_id)
                 return
-            except (Conflict, StaleVersion) as exc:
+            except Conflict as exc:
                 self._error(HTTPStatus.CONFLICT, exc.code, str(exc), request_id)
                 return
-            except (InvalidRequest, KeyError, TypeError, ValueError) as exc:
-                code = exc.code if isinstance(exc, ControlPlaneError) else "invalid_request"
-                self._error(HTTPStatus.BAD_REQUEST, code, str(exc), request_id)
+            except InvalidRequest as exc:
+                self._error(HTTPStatus.BAD_REQUEST, exc.code, str(exc), request_id)
+                return
+            except Exception:
+                dependencies.audit.emit(audit_event("administration.internal_error", request_id, "failed", actor_subject=identity.subject if identity else None, reason_code="internal_error"))
+                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error", "an internal error occurred", request_id)
                 return
             self._respond(status, {"data": _json_value(result), "request_id": request_id}, request_id)
 
@@ -179,11 +190,13 @@ def _handler(dependencies: ControlPlaneDependencies) -> type[BaseHTTPRequestHand
                 if segments[3:] == ["status"] and method == "POST":
                     body = self._body()
                     self._fields(body, frozenset({"status", "expected_version"}))
-                    return service.set_tenant_status(identity, tenant_id, TenantStatus(body["status"]), self._expected_version(body["expected_version"]), request_id), HTTPStatus.OK
+                    status = self._enum(TenantStatus, body["status"], "status")
+                    return service.set_tenant_status(identity, tenant_id, status, self._expected_version(body["expected_version"]), request_id), HTTPStatus.OK
                 if len(segments) == 5 and segments[3] == "memberships" and method == "PUT":
                     body = self._body()
                     self._fields(body, frozenset({"status", "expected_version"}))
-                    result = service.put_membership(identity, tenant_id, segments[4], MembershipStatus(body["status"]), self._expected_version(body["expected_version"], allow_zero=True), request_id)
+                    status = self._enum(MembershipStatus, body["status"], "status")
+                    result = service.put_membership(identity, tenant_id, segments[4], status, self._expected_version(body["expected_version"], allow_zero=True), request_id)
                     return result.membership, HTTPStatus.CREATED if result.created else HTTPStatus.OK
                 if len(segments) == 7 and segments[3] == "memberships" and segments[5] == "roles":
                     body = self._body()
@@ -204,7 +217,7 @@ def _handler(dependencies: ControlPlaneDependencies) -> type[BaseHTTPRequestHand
                     version = self._expected_version(body["expected_version"])
                     resource = segments[5]
                     if segments[4] == "products":
-                        product = Product(resource)
+                        product = self._enum(Product, resource, "product")
                         if method == "POST":
                             result = service.grant_product(identity, tenant_id, product, version, self.headers.get("Idempotency-Key", ""), request_id)
                             return result.entitlement, HTTPStatus.CREATED if result.created else HTTPStatus.OK
