@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import fields
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 
 def validate(root: Path = ROOT) -> list[str]:
@@ -46,6 +48,19 @@ def validate(root: Path = ROOT) -> list[str]:
     else:
         if ".env" not in gitignore or ".env.*" not in gitignore:
             errors.append(".gitignore must exclude .env credential files")
+    control_plane = root / "services/platform_control_plane"
+    if control_plane.is_dir():
+        app_source = (control_plane / "app.py").read_text(encoding="utf-8")
+        if "from .in_memory" in app_source or "InMemoryTenantRepository(" in app_source:
+            errors.append("control-plane HTTP startup must not instantiate test-only in-memory repositories")
+        if root == ROOT:
+            from services.platform_control_plane.audit import ControlPlaneAuditEvent
+
+            audit_fields = {item.name for item in fields(ControlPlaneAuditEvent)}
+            forbidden_audit_fields = {"authorization", "bearer_token", "prompt", "output", "request_body", "secret", "secret_value"}
+            present = audit_fields & forbidden_audit_fields
+            if present:
+                errors.append(f"control-plane audit schema contains sensitive fields: {sorted(present)}")
     return errors
 
 

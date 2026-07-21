@@ -15,8 +15,31 @@
       "id": "shared-contracts",
       "type": "package",
       "path": "packages/contracts",
-      "capabilities": ["organisation-and-tenant", "ai-gateway-and-model-router"],
+      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "ai-gateway-and-model-router"],
       "endpoints": []
+    },
+    {
+      "id": "platform-control-plane",
+      "type": "service",
+      "path": "services/platform_control_plane",
+      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "audit", "security"],
+      "endpoints": [
+        "GET /healthz",
+        "GET /v1/tenants",
+        "POST /v1/tenants",
+        "GET /v1/tenants/{tenant_id}",
+        "POST /v1/tenants/{tenant_id}/status",
+        "PUT /v1/tenants/{tenant_id}/memberships/{subject}",
+        "POST /v1/tenants/{tenant_id}/memberships/{subject}/roles/{role_id}",
+        "DELETE /v1/tenants/{tenant_id}/memberships/{subject}/roles/{role_id}",
+        "GET /v1/tenants/{tenant_id}/permissions/{subject}",
+        "GET /v1/tenants/{tenant_id}/entitlements",
+        "POST /v1/tenants/{tenant_id}/entitlements/products/{product}",
+        "DELETE /v1/tenants/{tenant_id}/entitlements/products/{product}",
+        "POST /v1/tenants/{tenant_id}/entitlements/models/{model}",
+        "DELETE /v1/tenants/{tenant_id}/entitlements/models/{model}",
+        "GET /v1/tenants/{tenant_id}/policy-version"
+      ]
     }
   ]
 }

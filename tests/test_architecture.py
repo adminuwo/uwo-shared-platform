@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 import unittest
 
 from tooling.validate_architecture import validate
@@ -6,6 +8,12 @@ from tooling.validate_architecture import validate
 class ArchitectureTests(unittest.TestCase):
     def test_manifest_is_valid(self) -> None:
         self.assertEqual(validate(), [])
+
+    def test_control_plane_is_registered_with_versioned_endpoints(self) -> None:
+        manifest = json.loads((Path(__file__).resolve().parents[1] / "architecture/manifest.json").read_text())
+        component = next(item for item in manifest["components"] if item["id"] == "platform-control-plane")
+        self.assertEqual(component["path"], "services/platform_control_plane")
+        self.assertTrue(all(endpoint == "GET /healthz" or "/v1/" in endpoint for endpoint in component["endpoints"]))
 
 
 if __name__ == "__main__":
