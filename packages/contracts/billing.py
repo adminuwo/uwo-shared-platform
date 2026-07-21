@@ -226,6 +226,26 @@ class LedgerEntry:
         _signed_integer(self.reserved_delta_microunits, "reserved_delta_microunits")
         _timestamp(self.created_at, "created_at")
         _version(self.version)
+        self.validate_financial_semantics()
+
+    def validate_financial_semantics(self) -> None:
+        """Enforce the canonical accounting meaning of every entry type."""
+
+        expected = {
+            LedgerEntryType.CREDIT_GRANT: (self.amount_microunits, 0),
+            LedgerEntryType.USAGE_RESERVATION: (-self.amount_microunits, self.amount_microunits),
+            LedgerEntryType.USAGE_CAPTURE: (0, -self.amount_microunits),
+            LedgerEntryType.RESERVATION_RELEASE: (self.amount_microunits, -self.amount_microunits),
+            LedgerEntryType.REFUND: (self.amount_microunits, 0),
+        }
+        if self.entry_type is LedgerEntryType.CREDIT_ADJUSTMENT:
+            if self.reserved_delta_microunits != 0:
+                raise ValueError("credit adjustments cannot change reserved credit")
+            if self.available_delta_microunits == 0 or abs(self.available_delta_microunits) != self.amount_microunits:
+                raise ValueError("credit adjustment amount must equal the absolute available delta")
+            return
+        if (self.available_delta_microunits, self.reserved_delta_microunits) != expected[self.entry_type]:
+            raise ValueError(f"{self.entry_type.value} ledger deltas do not match canonical semantics")
 
 
 @dataclass(frozen=True)

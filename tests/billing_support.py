@@ -56,20 +56,20 @@ class BillingFixture:
     audit: CaptureBillingAudit
 
 
-def make_billing_fixture() -> BillingFixture:
+def make_billing_fixture(*, clock=lambda: NOW, rate_card_values: tuple[RateCard, ...] | None = None) -> BillingFixture:
     control = make_fixture()
     control.subjects.provision(EXECUTOR.subject)
     failures = FailureInjector()
     accounts = InMemoryBillingAccountRepository(failures)
-    ledger = InMemoryLedgerRepository(failures)
+    ledger = InMemoryLedgerRepository(accounts, failures)
     reservations = InMemoryReservationRepository(failures)
     usage = InMemoryUsageEventRepository(failures)
-    rate_cards = InMemoryRateCardRepository((example_rate_card(),))
+    rate_cards = InMemoryRateCardRepository(rate_card_values or (example_rate_card(),))
     idempotency = InMemoryIdempotencyRepository(failures)
     audit = CaptureBillingAudit()
     authorizer = BillingAuthorizer(control.tenants, control.subjects, control.service._authorizer, frozenset({EXECUTOR.subject}))
     unit_of_work = InMemoryBillingUnitOfWorkFactory(accounts, ledger, reservations, usage, rate_cards, idempotency)
-    service = PlatformBillingService(control.tenants, accounts, ledger, reservations, usage, rate_cards, unit_of_work, authorizer, audit, clock=lambda: NOW)
+    service = PlatformBillingService(control.tenants, accounts, ledger, reservations, usage, rate_cards, unit_of_work, authorizer, audit, clock=clock)
     return BillingFixture(service, control, accounts, ledger, reservations, usage, rate_cards, idempotency, failures, audit)
 
 

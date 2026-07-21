@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import json
 from typing import Callable, Type, TypeVar
@@ -143,6 +143,7 @@ class PlatformBillingService:
         account = BillingAccount(f"billing:{tenant_id}", tenant_id, BillingAccountStatus.ACTIVE, timestamp, timestamp, 1)
         scope = self._scope("billing.account.create", tenant_id, identity)
         fingerprint = _fingerprint({"tenant_id": tenant_id, "expected_version": expected_version})
+        mutation_started = False
         try:
             with self._unit_of_work() as transaction:
                 record = transaction.idempotency.get(scope, idempotency_key)
@@ -150,11 +151,13 @@ class PlatformBillingService:
                     result = AccountMutationResult(_replay(record, fingerprint, BillingAccount), False)
                     transaction.commit()
                     return result
+                mutation_started = True
                 transaction.accounts.create(account)
                 transaction.idempotency.put(IdempotencyRecord(scope, idempotency_key, fingerprint, account))
                 transaction.commit()
         except RepositoryIntegrityError:
-            self._rollback(request_id, identity, tenant_id)
+            if mutation_started:
+                self._rollback(request_id, identity, tenant_id)
             raise
         self._audit.emit(audit_event("billing.account_created", request_id, "succeeded", actor_subject=identity.subject, tenant_id=tenant_id, account_id=account.account_id))
         return AccountMutationResult(account, True)
@@ -208,6 +211,7 @@ class PlatformBillingService:
             _id("ledger", f"{operation}:{tenant_id}:{identity.subject}:{idempotency_key}"), account.account_id, tenant_id,
             entry_type, abs(delta), delta, 0, _id("credit", idempotency_key), timestamp, identity.subject, expected_version + 1,
         )
+        mutation_started = False
         try:
             with self._unit_of_work() as transaction:
                 record = transaction.idempotency.get(scope, idempotency_key)
@@ -215,12 +219,14 @@ class PlatformBillingService:
                     replay = _replay(record, fingerprint, CreditMutationResult)
                     transaction.commit()
                     return replace(replay, created=False)
+                mutation_started = True
                 balance = transaction.ledger.append(entry, expected_version)
                 result = CreditMutationResult(balance, entry, True)
                 transaction.idempotency.put(IdempotencyRecord(scope, idempotency_key, fingerprint, result))
                 transaction.commit()
         except RepositoryIntegrityError:
-            self._rollback(request_id, identity, tenant_id)
+            if mutation_started:
+                self._rollback(request_id, identity, tenant_id)
             raise
         self._audit.emit(audit_event(f"billing.{entry_type.value}", request_id, "succeeded", actor_subject=identity.subject, tenant_id=tenant_id, account_id=account.account_id, ledger_entry_id=entry.entry_id))
         return result
@@ -278,6 +284,7 @@ class PlatformBillingService:
         reservation_id = _id("reservation", f"{tenant_id}:{request_id}")
         reservation = CreditReservation(reservation_id, account.account_id, tenant_id, product, model, request_id, amount_microunits, 0, 0, ReservationStatus.ACTIVE, timestamp, expires_at, timestamp, 1)
         entry = LedgerEntry(_id("ledger", f"reserve:{reservation_id}"), account.account_id, tenant_id, LedgerEntryType.USAGE_RESERVATION, amount_microunits, -amount_microunits, amount_microunits, reservation_id, timestamp, identity.subject, expected_balance_version + 1)
+        mutation_started = False
         try:
             with self._unit_of_work() as transaction:
                 record = transaction.idempotency.get(scope, idempotency_key)
@@ -285,13 +292,15 @@ class PlatformBillingService:
                     replay = _replay(record, fingerprint, ReservationMutationResult)
                     transaction.commit()
                     return replace(replay, created=False)
+                mutation_started = True
                 transaction.reservations.create(reservation)
                 balance = transaction.ledger.append(entry, expected_balance_version)
                 result = ReservationMutationResult(reservation, balance, entry, True)
                 transaction.idempotency.put(IdempotencyRecord(scope, idempotency_key, fingerprint, result))
                 transaction.commit()
         except RepositoryIntegrityError:
-            self._rollback(request_id, identity, tenant_id)
+            if mutation_started:
+                self._rollback(request_id, identity, tenant_id)
             raise
         except Conflict as exc:
             if exc.code == "insufficient_balance":
@@ -327,7 +336,7 @@ class PlatformBillingService:
             self._authorizer.require_executor(identity, reservation.tenant_id)
         _key(idempotency_key)
         scope = self._scope("billing.reservation.capture", reservation.tenant_id, identity)
-        fingerprint = _fingerprint({"reservation_id": reservation_id, "usage_event_id": usage_event_id, "provider_id": provider_id, "provider_model_id": provider_model_id, "region": region, "provider_request_id": provider_request_id, "input": dimensions.input_tokens, "output": dimensions.output_tokens, "expected_reservation_version": expected_reservation_version, "expected_balance_version": expected_balance_version, "administrative_override": administrative_override})
+        fingerprint = _fingerprint({"reservation_id": reservation_id, "usage_event_id": usage_event_id, "provider_id": provider_id, "provider_model_id": provider_model_id, "region": region, "provider_request_id": provider_request_id, "input": dimensions.input_tokens, "output": dimensions.output_tokens, "total": dimensions.total_tokens, "expected_reservation_version": expected_reservation_version, "expected_balance_version": expected_balance_version, "administrative_override": administrative_override})
         replay = self._early_replay(scope, idempotency_key, fingerprint, CaptureMutationResult)
         if replay is not None:
             return replace(replay, created=False)
@@ -337,7 +346,7 @@ class PlatformBillingService:
         timestamp = self._clock()
         if datetime.fromisoformat(reservation.expires_at.replace("Z", "+00:00")) <= datetime.fromisoformat(timestamp.replace("Z", "+00:00")) and not administrative_override:
             raise Conflict("reservation_expired", "expired reservations require an audited platform-administrator override")
-        rate_card = self._rate_cards.active()
+        rate_card = self._rate_cards.active_at(timestamp)
         charge = calculate_charge(rate_card, reservation.product, reservation.model, provider_id, region, dimensions, timestamp)
         _positive(charge.total_charge_microunits, "calculated_charge_microunits")
         remaining = reservation.estimated_microunits - reservation.captured_microunits - reservation.released_microunits
@@ -348,6 +357,7 @@ class PlatformBillingService:
         updated = replace(reservation, captured_microunits=captured, status=status, updated_at=timestamp, version=reservation.version + 1)
         usage = UsageEvent(usage_event_id, reservation_id, reservation.tenant_id, reservation.product, reservation.model, provider_id, provider_model_id, region, reservation.request_id, provider_request_id, dimensions, timestamp, rate_card.rate_card_id, rate_card.version, charge.total_charge_microunits)
         entry = LedgerEntry(_id("ledger", f"capture:{usage_event_id}"), account.account_id, reservation.tenant_id, LedgerEntryType.USAGE_CAPTURE, charge.total_charge_microunits, 0, -charge.total_charge_microunits, reservation_id, timestamp, identity.subject, expected_balance_version + 1)
+        mutation_started = False
         try:
             with self._unit_of_work() as transaction:
                 record = transaction.idempotency.get(scope, idempotency_key)
@@ -355,6 +365,7 @@ class PlatformBillingService:
                     replay = _replay(record, fingerprint, CaptureMutationResult)
                     transaction.commit()
                     return replace(replay, created=False)
+                mutation_started = True
                 transaction.reservations.update(updated, expected_reservation_version)
                 transaction.usage.append(usage)
                 balance = transaction.ledger.append(entry, expected_balance_version)
@@ -362,7 +373,8 @@ class PlatformBillingService:
                 transaction.idempotency.put(IdempotencyRecord(scope, idempotency_key, fingerprint, result))
                 transaction.commit()
         except RepositoryIntegrityError:
-            self._rollback(request_id, identity, reservation.tenant_id)
+            if mutation_started:
+                self._rollback(request_id, identity, reservation.tenant_id)
             raise
         event_type = "billing.reservation_captured_override" if administrative_override else "billing.reservation_captured"
         self._audit.emit(audit_event(event_type, request_id, "succeeded", actor_subject=identity.subject, tenant_id=reservation.tenant_id, account_id=account.account_id, reservation_id=reservation_id, usage_event_id=usage_event_id, ledger_entry_id=entry.entry_id))
@@ -387,6 +399,7 @@ class PlatformBillingService:
         timestamp = self._clock()
         updated = replace(reservation, released_microunits=reservation.released_microunits + remaining, status=ReservationStatus.RELEASED, updated_at=timestamp, version=reservation.version + 1)
         entry = LedgerEntry(_id("ledger", f"release:{reservation_id}:{expected_reservation_version}"), account.account_id, reservation.tenant_id, LedgerEntryType.RESERVATION_RELEASE, remaining, remaining, -remaining, reservation_id, timestamp, identity.subject, expected_balance_version + 1)
+        mutation_started = False
         try:
             with self._unit_of_work() as transaction:
                 record = transaction.idempotency.get(scope, idempotency_key)
@@ -394,13 +407,15 @@ class PlatformBillingService:
                     replay = _replay(record, fingerprint, ReleaseMutationResult)
                     transaction.commit()
                     return replace(replay, created=False)
+                mutation_started = True
                 transaction.reservations.update(updated, expected_reservation_version)
                 balance = transaction.ledger.append(entry, expected_balance_version)
                 result = ReleaseMutationResult(updated, balance, entry, True)
                 transaction.idempotency.put(IdempotencyRecord(scope, idempotency_key, fingerprint, result))
                 transaction.commit()
         except RepositoryIntegrityError:
-            self._rollback(request_id, identity, reservation.tenant_id)
+            if mutation_started:
+                self._rollback(request_id, identity, reservation.tenant_id)
             raise
         self._audit.emit(audit_event("billing.reservation_released", request_id, "succeeded", actor_subject=identity.subject, tenant_id=reservation.tenant_id, account_id=account.account_id, reservation_id=reservation_id, ledger_entry_id=entry.entry_id))
         return result
@@ -421,25 +436,152 @@ class PlatformBillingService:
 
     def active_rate_card(self, identity: VerifiedSubjectIdentity, tenant_id: str, request_id: str):
         self._authorizer.require_read(identity, tenant_id)
-        return self._rate_cards.active().identity
+        return self._rate_cards.active_at(self._clock()).identity
 
-    def reserve_for_gateway(self, identity, tenant_id, product, model, request_id, amount_microunits, expires_at, idempotency_key):
-        account = self._active_account(tenant_id)
-        balance = self._ledger.balance(account.account_id, tenant_id, self._clock())
-        return self.reserve(identity, tenant_id, product, model, request_id, amount_microunits, expires_at, balance.version, idempotency_key)
+    def reserve_for_gateway(self, identity, tenant_id, product, model, request_id, amount_microunits, reservation_seconds, idempotency_key):
+        """Atomically reserve against the current balance; callers never carry versions."""
 
-    def capture_for_gateway(self, identity, reservation_id, usage_event_id, provider_id, provider_model_id, region, provider_request_id, dimensions, idempotency_key, request_id):
-        reservation = self._reservations.get(reservation_id)
-        if reservation is None:
-            raise ResourceNotFound("unknown_reservation", "credit reservation does not exist")
-        account = self._account(reservation.tenant_id)
-        balance = self._ledger.balance(account.account_id, reservation.tenant_id, self._clock())
-        return self.capture(identity, reservation_id, usage_event_id, provider_id, provider_model_id, region, provider_request_id, dimensions, reservation.version, balance.version, idempotency_key, request_id)
+        self._authorizer.require_executor(identity, tenant_id)
+        _positive(amount_microunits, "estimated_microunits")
+        _positive(reservation_seconds, "reservation_seconds")
+        _key(idempotency_key)
+        scope = self._scope("billing.gateway.reserve", tenant_id, identity)
+        fingerprint = _fingerprint({"tenant_id": tenant_id, "product": product.value, "model": model, "request_id": request_id, "amount": amount_microunits, "reservation_seconds": reservation_seconds})
+        mutation_started = False
+        try:
+            with self._unit_of_work() as transaction:
+                record = transaction.idempotency.get(scope, idempotency_key)
+                if record is not None:
+                    replay = _replay(record, fingerprint, ReservationMutationResult)
+                    transaction.commit()
+                    return replace(replay, created=False)
+                account = transaction.accounts.get_by_tenant(tenant_id)
+                if account is None:
+                    raise ResourceNotFound("unknown_billing_account", "billing account does not exist")
+                if account.status is BillingAccountStatus.CLOSED:
+                    raise Conflict("billing_account_closed", "closed billing accounts cannot accept debit activity")
+                if account.status is BillingAccountStatus.SUSPENDED:
+                    raise Conflict("billing_account_suspended", "suspended billing accounts cannot accept debit activity")
+                timestamp = self._clock()
+                expires_at = (datetime.fromisoformat(timestamp.replace("Z", "+00:00")) + timedelta(seconds=reservation_seconds)).isoformat()
+                balance_before = transaction.ledger.balance(account.account_id, tenant_id, timestamp)
+                reservation_id = _id("reservation", f"{tenant_id}:{request_id}")
+                reservation = CreditReservation(reservation_id, account.account_id, tenant_id, product, model, request_id, amount_microunits, 0, 0, ReservationStatus.ACTIVE, timestamp, expires_at, timestamp, 1)
+                entry = LedgerEntry(_id("ledger", f"reserve:{reservation_id}"), account.account_id, tenant_id, LedgerEntryType.USAGE_RESERVATION, amount_microunits, -amount_microunits, amount_microunits, reservation_id, timestamp, identity.subject, balance_before.version + 1)
+                mutation_started = True
+                transaction.reservations.create(reservation)
+                balance = transaction.ledger.append(entry, balance_before.version)
+                result = ReservationMutationResult(reservation, balance, entry, True)
+                transaction.idempotency.put(IdempotencyRecord(scope, idempotency_key, fingerprint, result))
+                transaction.commit()
+        except RepositoryIntegrityError:
+            if mutation_started:
+                self._rollback(request_id, identity, tenant_id)
+            raise
+        except Conflict as exc:
+            if exc.code == "insufficient_balance":
+                self._audit.emit(audit_event("billing.insufficient_balance", request_id, "denied", actor_subject=identity.subject, tenant_id=tenant_id, reason_code="insufficient_balance"))
+                raise PaymentRequired("insufficient_balance", "available credit balance is insufficient") from exc
+            raise
+        self._audit.emit(audit_event("billing.reservation_created", request_id, "succeeded", actor_subject=identity.subject, tenant_id=tenant_id, account_id=account.account_id, reservation_id=reservation.reservation_id, ledger_entry_id=entry.entry_id))
+        return result
 
-    def release_for_gateway(self, identity, reservation_id, idempotency_key, request_id):
-        reservation = self._reservations.get(reservation_id)
-        if reservation is None:
-            raise ResourceNotFound("unknown_reservation", "credit reservation does not exist")
-        account = self._account(reservation.tenant_id)
-        balance = self._ledger.balance(account.account_id, reservation.tenant_id, self._clock())
-        return self.release(identity, reservation_id, reservation.version, balance.version, idempotency_key, request_id)
+    def capture_for_gateway(self, identity, tenant_id, reservation_id, usage_event_id, provider_id, provider_model_id, region, provider_request_id, dimensions, idempotency_key, request_id):
+        """Atomically load current lifecycle state, capture usage, and release unused credit."""
+
+        _key(idempotency_key)
+        self._authorizer.require_executor(identity, tenant_id)
+        scope = self._scope("billing.gateway.capture", tenant_id, identity)
+        fingerprint = _fingerprint({"reservation_id": reservation_id, "usage_event_id": usage_event_id, "provider_id": provider_id, "provider_model_id": provider_model_id, "region": region, "provider_request_id": provider_request_id, "input": dimensions.input_tokens, "output": dimensions.output_tokens, "total": dimensions.total_tokens})
+        mutation_started = False
+        try:
+            with self._unit_of_work() as transaction:
+                record = transaction.idempotency.get(scope, idempotency_key)
+                if record is not None:
+                    replay = _replay(record, fingerprint, CaptureMutationResult)
+                    transaction.commit()
+                    return replace(replay, created=False)
+                reservation = transaction.reservations.get(reservation_id)
+                if reservation is None or reservation.tenant_id != tenant_id:
+                    raise ResourceNotFound("unknown_reservation", "credit reservation does not exist")
+                account = transaction.accounts.get_by_tenant(reservation.tenant_id)
+                if account is None:
+                    raise ResourceNotFound("unknown_billing_account", "billing account does not exist")
+                if account.status is not BillingAccountStatus.ACTIVE:
+                    raise Conflict(f"billing_account_{account.status.value}", "billing account cannot accept debit activity")
+                if reservation.status not in (ReservationStatus.PENDING, ReservationStatus.ACTIVE, ReservationStatus.PARTIALLY_CAPTURED):
+                    raise Conflict("invalid_reservation_transition", "reservation cannot be captured from its current state")
+                timestamp = self._clock()
+                if datetime.fromisoformat(reservation.expires_at.replace("Z", "+00:00")) <= datetime.fromisoformat(timestamp.replace("Z", "+00:00")):
+                    raise Conflict("reservation_expired", "expired reservations require an audited platform-administrator override")
+                rate_card = transaction.rate_cards.active_at(timestamp)
+                charge = calculate_charge(rate_card, reservation.product, reservation.model, provider_id, region, dimensions, timestamp)
+                _positive(charge.total_charge_microunits, "calculated_charge_microunits")
+                remaining = reservation.estimated_microunits - reservation.captured_microunits - reservation.released_microunits
+                if charge.total_charge_microunits > remaining:
+                    raise Conflict("capture_exceeds_reservation", "captured amount cannot exceed remaining reservation")
+                balance_before = transaction.ledger.balance(account.account_id, reservation.tenant_id, timestamp)
+                captured_total = reservation.captured_microunits + charge.total_charge_microunits
+                unused = remaining - charge.total_charge_microunits
+                final_status = ReservationStatus.CAPTURED if unused == 0 else ReservationStatus.RELEASED
+                updated = replace(reservation, captured_microunits=captured_total, released_microunits=reservation.released_microunits + unused, status=final_status, updated_at=timestamp, version=reservation.version + 1)
+                usage = UsageEvent(usage_event_id, reservation_id, reservation.tenant_id, reservation.product, reservation.model, provider_id, provider_model_id, region, reservation.request_id, provider_request_id, dimensions, timestamp, rate_card.rate_card_id, rate_card.version, charge.total_charge_microunits)
+                capture_entry = LedgerEntry(_id("ledger", f"capture:{usage_event_id}"), account.account_id, reservation.tenant_id, LedgerEntryType.USAGE_CAPTURE, charge.total_charge_microunits, 0, -charge.total_charge_microunits, reservation_id, timestamp, identity.subject, balance_before.version + 1)
+                mutation_started = True
+                transaction.reservations.update(updated, reservation.version)
+                transaction.usage.append(usage)
+                balance = transaction.ledger.append(capture_entry, balance_before.version)
+                if unused:
+                    release_entry = LedgerEntry(_id("ledger", f"release-after-capture:{usage_event_id}"), account.account_id, reservation.tenant_id, LedgerEntryType.RESERVATION_RELEASE, unused, unused, -unused, reservation_id, timestamp, identity.subject, balance.version + 1)
+                    balance = transaction.ledger.append(release_entry, balance.version)
+                result = CaptureMutationResult(updated, balance, usage, charge, capture_entry, True)
+                transaction.idempotency.put(IdempotencyRecord(scope, idempotency_key, fingerprint, result))
+                transaction.commit()
+        except RepositoryIntegrityError:
+            if mutation_started:
+                self._rollback(request_id, identity, tenant_id)
+            raise
+        self._audit.emit(audit_event("billing.reservation_captured", request_id, "succeeded", actor_subject=identity.subject, tenant_id=tenant_id, account_id=account.account_id, reservation_id=reservation_id, usage_event_id=usage_event_id, ledger_entry_id=capture_entry.entry_id))
+        return result
+
+    def release_for_gateway(self, identity, tenant_id, reservation_id, idempotency_key, request_id):
+        """Atomically compensate using current reservation and ledger state."""
+
+        _key(idempotency_key)
+        self._authorizer.require_executor(identity, tenant_id, allow_suspended=True)
+        scope = self._scope("billing.gateway.release", tenant_id, identity)
+        fingerprint = _fingerprint({"reservation_id": reservation_id})
+        mutation_started = False
+        try:
+            with self._unit_of_work() as transaction:
+                record = transaction.idempotency.get(scope, idempotency_key)
+                if record is not None:
+                    replay = _replay(record, fingerprint, ReleaseMutationResult)
+                    transaction.commit()
+                    return replace(replay, created=False)
+                reservation = transaction.reservations.get(reservation_id)
+                if reservation is None or reservation.tenant_id != tenant_id:
+                    raise ResourceNotFound("unknown_reservation", "credit reservation does not exist")
+                if reservation.status not in (ReservationStatus.PENDING, ReservationStatus.ACTIVE, ReservationStatus.PARTIALLY_CAPTURED):
+                    raise Conflict("invalid_reservation_transition", "reservation cannot be released from its current state")
+                account = transaction.accounts.get_by_tenant(reservation.tenant_id)
+                if account is None:
+                    raise ResourceNotFound("unknown_billing_account", "billing account does not exist")
+                timestamp = self._clock()
+                balance_before = transaction.ledger.balance(account.account_id, reservation.tenant_id, timestamp)
+                remaining = reservation.estimated_microunits - reservation.captured_microunits - reservation.released_microunits
+                _positive(remaining, "remaining_microunits")
+                updated = replace(reservation, released_microunits=reservation.released_microunits + remaining, status=ReservationStatus.RELEASED, updated_at=timestamp, version=reservation.version + 1)
+                entry = LedgerEntry(_id("ledger", f"gateway-release:{reservation_id}"), account.account_id, reservation.tenant_id, LedgerEntryType.RESERVATION_RELEASE, remaining, remaining, -remaining, reservation_id, timestamp, identity.subject, balance_before.version + 1)
+                mutation_started = True
+                transaction.reservations.update(updated, reservation.version)
+                balance = transaction.ledger.append(entry, balance_before.version)
+                result = ReleaseMutationResult(updated, balance, entry, True)
+                transaction.idempotency.put(IdempotencyRecord(scope, idempotency_key, fingerprint, result))
+                transaction.commit()
+        except RepositoryIntegrityError:
+            if mutation_started:
+                self._rollback(request_id, identity, tenant_id)
+            raise
+        self._audit.emit(audit_event("billing.reservation_released", request_id, "succeeded", actor_subject=identity.subject, tenant_id=tenant_id, account_id=account.account_id, reservation_id=reservation_id, ledger_entry_id=entry.entry_id))
+        return result

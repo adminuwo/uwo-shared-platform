@@ -17,6 +17,15 @@ class BillingError(ValueError):
         self.code = code
 
 
+class BillingCompensationError(RuntimeError):
+    """A reservation remains discoverable because failure compensation did not complete."""
+
+    code = "billing_compensation_failed"
+
+    def __init__(self) -> None:
+        super().__init__("billing compensation failed; the reservation requires recovery")
+
+
 @dataclass(frozen=True)
 class BillingAuthorization:
     authorization_id: str

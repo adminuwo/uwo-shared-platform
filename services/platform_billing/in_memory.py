@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import datetime, timezone
 from threading import RLock
 from typing import Any
 
@@ -64,7 +66,8 @@ class InMemoryBillingAccountRepository:
 
 
 class InMemoryLedgerRepository:
-    def __init__(self, failures: FailureInjector | None = None) -> None:
+    def __init__(self, accounts: InMemoryBillingAccountRepository, failures: FailureInjector | None = None) -> None:
+        self._accounts = accounts
         self._items: dict[str, LedgerEntry] = {}
         self._account_entries: dict[str, list[str]] = {}
         self._lock = RLock()
@@ -72,12 +75,23 @@ class InMemoryLedgerRepository:
 
     def balance(self, account_id: str, tenant_id: str, as_of: str) -> CreditBalance:
         with self._lock:
+            account = self._accounts.get_by_tenant(tenant_id)
+            if account is None or account.account_id != account_id:
+                raise RepositoryIntegrityError("ledger account and tenant do not match a billing account")
             available = 0
             reserved = 0
             entries = self._account_entries.get(account_id, [])
             version = 1
             for entry_id in entries:
                 entry = self._items[entry_id]
+                try:
+                    entry = replace(entry)
+                except (TypeError, ValueError) as exc:
+                    raise RepositoryIntegrityError("stored ledger entry violates canonical financial semantics") from exc
+                if entry.account_id != account_id or entry.tenant_id != tenant_id:
+                    raise RepositoryIntegrityError("stored ledger entry crosses an account or tenant boundary")
+                if entry.version != version + 1:
+                    raise RepositoryIntegrityError("stored ledger entry versions are not sequential")
                 available += entry.available_delta_microunits
                 reserved += entry.reserved_delta_microunits
                 version = entry.version
@@ -87,6 +101,13 @@ class InMemoryLedgerRepository:
 
     def append(self, entry: LedgerEntry, expected_version: int) -> CreditBalance:
         with self._lock:
+            try:
+                entry = replace(entry)
+            except (TypeError, ValueError) as exc:
+                raise RepositoryIntegrityError("ledger entry violates canonical financial semantics") from exc
+            account = self._accounts.get_by_tenant(entry.tenant_id)
+            if account is None or account.account_id != entry.account_id:
+                raise RepositoryIntegrityError("ledger entry account and tenant do not match")
             if entry.entry_id in self._items:
                 raise Conflict("ledger_entry_exists", "ledger entry already exists")
             current = self.balance(entry.account_id, entry.tenant_id, entry.created_at)
@@ -191,7 +212,6 @@ class InMemoryUsageEventRepository:
 class InMemoryRateCardRepository:
     def __init__(self, cards: tuple[RateCard, ...] = ()) -> None:
         self._items: dict[tuple[str, int], RateCard] = {}
-        self._active: tuple[str, int] | None = None
         self._lock = RLock()
         for card in cards:
             self.add(card)
@@ -201,26 +221,36 @@ class InMemoryRateCardRepository:
             key = (rate_card.rate_card_id, rate_card.version)
             if key in self._items:
                 raise Conflict("rate_card_exists", "immutable rate-card version already exists")
+            if any(item.rate_card_id == rate_card.rate_card_id and item.effective_at == rate_card.effective_at for item in self._items.values()):
+                raise Conflict("ambiguous_rate_card", "a rate-card family cannot have multiple versions at the same effective time")
             self._items[key] = rate_card
-            if self._active is None or rate_card.effective_at >= self._items[self._active].effective_at:
-                self._active = key
             return rate_card
 
     def get(self, rate_card_id: str, version: int) -> RateCard | None:
         with self._lock:
             return self._items.get((rate_card_id, version))
 
-    def active(self) -> RateCard:
+    def active_at(self, as_of_utc: str) -> RateCard:
         with self._lock:
-            if self._active is None:
-                raise ResourceNotFound("unknown_rate_card", "no active rate card is configured")
-            return self._items[self._active]
+            try:
+                as_of = datetime.fromisoformat(as_of_utc.replace("Z", "+00:00"))
+                if as_of.utcoffset() != timezone.utc.utcoffset(as_of):
+                    raise ValueError("as-of time is not UTC")
+                eligible = [
+                    card for card in self._items.values()
+                    if datetime.fromisoformat(card.effective_at.replace("Z", "+00:00")) <= as_of
+                ]
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise RepositoryIntegrityError("rate-card lookup requires a valid UTC timestamp") from exc
+            if not eligible:
+                raise ResourceNotFound("unknown_rate_card", "no rate card is effective at the requested time")
+            return max(eligible, key=lambda card: (datetime.fromisoformat(card.effective_at.replace("Z", "+00:00")), card.rate_card_id, card.version))
 
     def _snapshot(self):
-        return (dict(self._items), self._active)
+        return dict(self._items)
 
     def _restore(self, snapshot) -> None:
-        self._items, self._active = dict(snapshot[0]), snapshot[1]
+        self._items = dict(snapshot)
 
 
 class InMemoryIdempotencyRepository:

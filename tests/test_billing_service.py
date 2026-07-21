@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 import json
 import unittest
+from unittest.mock import patch
 
 from packages.contracts import BillingAccountStatus, MembershipStatus, Product, ReservationStatus, TenantStatus, UsageDimensions
 from services.platform_billing.errors import Conflict, PaymentRequired, RepositoryIntegrityError
@@ -125,6 +126,22 @@ class PlatformBillingServiceTests(unittest.TestCase):
             fixture.service.grant_credits(PLATFORM, "tenant-rollback", 100, 1, "grant-rb", "req-grant-rb")
         self.assertEqual(fixture.service.read_balance(PLATFORM, "tenant-rollback", "req-read").available_microunits, 0)
 
+    def test_prevalidation_and_idempotency_conflicts_do_not_emit_rollback_events(self) -> None:
+        with self.assertRaises(Exception):
+            self.fixture.service.grant_credits(PLATFORM, "tenant-billing", 0, 1, "invalid-grant", "req-invalid-grant")
+        fund(self.fixture, amount=100)
+        with self.assertRaises(Conflict):
+            self.fixture.service.grant_credits(PLATFORM, "tenant-billing", 200, 1, "grant-tenant-billing-100", "req-idempotency-conflict")
+        request_ids = {"req-invalid-grant", "req-idempotency-conflict"}
+        self.assertEqual([event for event in self.fixture.audit.events if event.request_id in request_ids and event.event_type == "billing.transaction_rolled_back"], [])
+
+    def test_repository_failure_before_first_mutation_does_not_emit_rollback_event(self) -> None:
+        self.fixture.control.service.create_tenant(PLATFORM, "tenant-prewrite-failure", "Prewrite", "in", "create-prewrite", "req-create-prewrite")
+        with patch.object(self.fixture.idempotency, "get", side_effect=RepositoryIntegrityError("secret prewrite failure")):
+            with self.assertRaises(RepositoryIntegrityError):
+                self.fixture.service.create_account(PLATFORM, "tenant-prewrite-failure", "account-prewrite", "req-prewrite")
+        self.assertEqual([event for event in self.fixture.audit.events if event.request_id == "req-prewrite"], [])
+
     def test_capture_transaction_rollback_removes_usage_and_state_change(self) -> None:
         reserved = self._reserve()
         self.fixture.failures.fail_next("ledger_write")
@@ -168,6 +185,24 @@ class PlatformBillingServiceTests(unittest.TestCase):
         serialized = json.dumps(stored.__dict__, default=lambda value: value.__dict__)
         for forbidden in ("prompt", "model_output", "api_key", "bearer"):
             self.assertNotIn(forbidden, serialized.lower())
+
+    def test_capture_selects_rate_card_effective_at_usage_occurrence(self) -> None:
+        later = "2026-07-20T12:30:00+00:00"
+        after = "2026-07-20T12:31:00+00:00"
+        current = [NOW]
+        fixture = make_billing_fixture(clock=lambda: current[0], rate_card_values=(example_rate_card(1, NOW), example_rate_card(2, later, 2)))
+        provision(fixture)
+        funded = fund(fixture)
+        first = fixture.service.reserve(EXECUTOR, "tenant-billing", Product.AISA, "uwo-general-v1", "req-rate-before", 5_000, FUTURE, funded.balance.version, "reserve-rate-before")
+        before_capture = fixture.service.capture(EXECUTOR, first.reservation.reservation_id, "usage-rate-before", "azure-openai-in", None, "in", None, UsageDimensions(1, 0, 1), 1, first.balance.version, "capture-rate-before", "req-rate-before")
+        self.assertEqual(before_capture.usage_event.rate_card_version, 1)
+
+        current[0] = after
+        balance = fixture.service.read_balance(PLATFORM, "tenant-billing", "req-rate-balance")
+        second = fixture.service.reserve(EXECUTOR, "tenant-billing", Product.AISA, "uwo-general-v1", "req-rate-after", 5_000, FUTURE, balance.version, "reserve-rate-after")
+        after_capture = fixture.service.capture(EXECUTOR, second.reservation.reservation_id, "usage-rate-after", "azure-openai-in", None, "in", None, UsageDimensions(1, 0, 1), 1, second.balance.version, "capture-rate-after", "req-rate-after")
+        self.assertEqual(after_capture.usage_event.rate_card_version, 2)
+        self.assertGreater(after_capture.charge.total_charge_microunits, before_capture.charge.total_charge_microunits)
 
     def test_ledger_pagination(self) -> None:
         first = fund(self.fixture, amount=100)

@@ -13,7 +13,7 @@ from services.platform_billing.app import BillingDependencies, create_server
 from services.platform_control_plane.auth import AuthenticationError
 
 from billing_support import EXECUTOR, FUTURE, fund, make_billing_fixture, provision
-from control_plane_support import ADMIN_A, PLATFORM
+from control_plane_support import ADMIN_A, PLATFORM, bootstrap_tenant_admin
 
 
 class Authenticator:
@@ -87,6 +87,36 @@ class PlatformBillingHttpTests(unittest.TestCase):
         events = [event for event in self.fixture.audit.events if event.request_id == request_id]
         self.assertEqual(len(events), 1)
         self.assertNotIn("Bearer admin-a", json.dumps([event.__dict__ for event in events]))
+
+    def test_unknown_tenant_is_404_with_exactly_one_denial_event(self):
+        request_id = "req-http-unknown-tenant"
+        with self.assertRaises(HTTPError) as caught:
+            self.request("GET", "/v1/billing/accounts/tenant-does-not-exist", request_id=request_id)
+        self.assertEqual(caught.exception.code, 404)
+        self.assertEqual(json.load(caught.exception)["error"]["code"], "unknown_tenant")
+        self.assertEqual(len([event for event in self.fixture.audit.events if event.request_id == request_id]), 1)
+
+    def test_authorization_repository_failures_are_redacted_500_not_denials(self):
+        if self.fixture.control.tenants.get("tenant-a") is None:
+            bootstrap_tenant_admin(self.fixture.control, "tenant-a", ADMIN_A)
+            self.fixture.service.create_account(PLATFORM, "tenant-a", "account-tenant-a", "req-account-tenant-a")
+        failures = (
+            (self.fixture.control.tenants, "get", "req-http-tenant-repository-failure"),
+            (self.fixture.control.memberships, "get", "req-http-membership-repository-failure"),
+            (self.fixture.control.roles, "get", "req-http-role-repository-failure"),
+        )
+        detail = "secret authorization repository detail"
+        for repository, method, request_id in failures:
+            with self.subTest(request_id=request_id), patch.object(repository, method, side_effect=RuntimeError(detail)):
+                with self.assertRaises(HTTPError) as caught:
+                    self.request("GET", "/v1/billing/accounts/tenant-a", token="admin-a", request_id=request_id)
+                self.assertEqual(caught.exception.code, 500)
+                payload = json.load(caught.exception)
+                self.assertEqual(payload["error"], {"code": "internal_error", "message": "an internal error occurred"})
+                self.assertNotIn(detail, json.dumps(payload))
+            events = [event for event in self.fixture.audit.events if event.request_id == request_id]
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0].event_type, "billing.internal_error")
 
     def test_malformed_oversized_and_internal_errors_are_redacted(self):
         with self.assertRaises(HTTPError) as malformed:

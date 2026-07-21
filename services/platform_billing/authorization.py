@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from packages.contracts import Permission, TenantStatus, VerifiedSubjectIdentity
 from services.platform_control_plane.authorization import ControlPlaneAuthorizer, SubjectDirectory
+from services.platform_control_plane.errors import AuthorizationDenied as ControlPlaneAuthorizationDenied
+from services.platform_control_plane.errors import ResourceNotFound as ControlPlaneResourceNotFound
 from services.platform_control_plane.repositories import TenantRepository
 
 from .errors import AuthorizationDenied, ResourceNotFound
@@ -26,11 +28,10 @@ class BillingAuthorizer:
     def _translate(action) -> None:
         try:
             action()
-        except Exception as exc:
-            code = getattr(exc, "code", "authorization_denied")
-            if code == "unknown_tenant":
-                raise ResourceNotFound(code, "tenant does not exist") from exc
-            raise AuthorizationDenied(code, str(exc)) from exc
+        except ControlPlaneResourceNotFound as exc:
+            raise ResourceNotFound(exc.code, "tenant does not exist") from exc
+        except ControlPlaneAuthorizationDenied as exc:
+            raise AuthorizationDenied(exc.code, str(exc)) from exc
 
     def require_platform_admin(self, identity: VerifiedSubjectIdentity) -> None:
         self._translate(lambda: self._control_plane.require_platform_admin(identity))

@@ -27,6 +27,7 @@ def raw_response(*output, response_id="resp_123", status="completed"):
         "error": None,
         "incomplete_details": None,
         "output": list(output),
+        "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
     }
 
 
@@ -58,7 +59,7 @@ class ProviderAdapterTests(unittest.TestCase):
         raw = raw_response(message(output_text("normal result")))
         raw["usage"] = {"input_tokens": 12, "output_tokens": 3, "total_tokens": 15}
         response = self.openai(raw).execute(self.request, 3)
-        self.assertEqual((response.input_tokens, response.output_tokens, response.total_tokens), (12, 3, 15))
+        self.assertEqual((response.usage.input_tokens, response.usage.output_tokens, response.usage.total_tokens), (12, 3, 15))
         self.assertEqual(response.provider_model_id, "provider-general-model")
 
     def test_multiple_output_text_elements_and_messages_are_aggregated(self) -> None:
@@ -76,6 +77,34 @@ class ProviderAdapterTests(unittest.TestCase):
             self.openai(raw).execute(self.request, 3)
         self.assertEqual(caught.exception.code, "provider_refusal")
         self.assertEqual(caught.exception.provider_response_id, "resp_refused")
+
+    def test_missing_and_null_usage_fail_closed(self) -> None:
+        for value in ("missing", None):
+            raw = raw_response(message(output_text("not returned")), response_id=f"resp_{value}")
+            if value == "missing":
+                del raw["usage"]
+            else:
+                raw["usage"] = None
+            with self.subTest(value=value), self.assertRaises(ProviderError) as caught:
+                self.openai(raw).execute(self.request, 3)
+            self.assertEqual(caught.exception.code, "missing_usage")
+
+    def test_partial_negative_and_inconsistent_usage_fail_closed(self) -> None:
+        invalid = (
+            {"input_tokens": 1, "output_tokens": 2},
+            {"input_tokens": -1, "output_tokens": 2, "total_tokens": 1},
+            {"input_tokens": 1, "output_tokens": 2, "total_tokens": 4},
+        )
+        for index, usage in enumerate(invalid):
+            raw = raw_response(message(output_text("not returned")))
+            raw["usage"] = usage
+            with self.subTest(index=index), self.assertRaises(ProviderError) as caught:
+                self.openai(raw).execute(self.request, 3)
+            self.assertEqual(caught.exception.code, "malformed_response")
+
+    def test_explicit_zero_usage_is_valid(self) -> None:
+        response = self.openai(raw_response(message(output_text("zero usage")))).execute(self.request, 3)
+        self.assertEqual((response.usage.input_tokens, response.usage.output_tokens, response.usage.total_tokens), (0, 0, 0))
 
     def test_empty_output_fails_closed(self) -> None:
         with self.assertRaises(ProviderError) as caught:
