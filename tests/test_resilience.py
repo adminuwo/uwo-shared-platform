@@ -1,6 +1,6 @@
 import unittest
 
-from services.ai_gateway.providers import ProviderError, ProviderRequest, ProviderResponse, ProviderTimeout
+from services.ai_gateway.providers import ProviderError, ProviderRequest, ProviderResponse, ProviderTimeout, ProviderUsage
 from services.ai_gateway.resilience import ProviderUnavailable, ResiliencePolicy, ResilientProviderExecutor
 
 
@@ -19,7 +19,7 @@ class SequenceAdapter:
 
 
 REQUEST = ProviderRequest("req", "tenant", "model", "prompt")
-RESPONSE = ProviderResponse("provider-req", "result")
+RESPONSE = ProviderResponse("provider-req", "result", usage=ProviderUsage(0, 0, 0))
 
 
 class ResilienceTests(unittest.TestCase):

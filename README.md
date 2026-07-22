@@ -23,7 +23,7 @@ Check service health at `GET /healthz`. Request a policy decision with `POST /v1
 }
 ```
 
-Authenticated requests use `Authorization: Bearer <signed-edge-assertion>` and may supply `X-Request-ID`; otherwise the gateway generates a request ID. `POST /v1/execute` accepts the routing fields plus `prompt`, performs authorization, billing, and pre-execution content-safety checks, then invokes a configured provider adapter with bounded timeout, retry, fallback, and circuit-breaker controls. Provider output must pass a second content-safety gate before it can be returned.
+Authenticated requests use `Authorization: Bearer <signed-edge-assertion>` and may supply `X-Request-ID`; otherwise the gateway generates a request ID. `POST /v1/execute` accepts the routing fields plus `prompt`, performs authorization, billing, and pre-execution content-safety checks, then invokes a configured provider adapter with bounded timeout, retry, fallback, and circuit-breaker controls. Provider output must pass a second content-safety gate before it can be returned. A successful provider response must contain explicit, complete, non-negative token usage whose total equals input plus output; missing, null, partial, malformed, or inconsistent usage fails closed before output is returned and cannot create a fabricated zero-usage charge.
 
 The committed provider endpoints are non-routable examples and all credentials are `env://` secret references. Never commit API keys. A real runtime must set `UWO_AUTH_SIGNING_KEY` and provider secrets in its managed secret environment. The included config content-safety authorizer is for internal/test use; `UWO_ENVIRONMENT=production` fails startup until an external production authorizer is integrated.
 
@@ -41,6 +41,20 @@ Policy documents accept JSON values only, recursively freeze objects and arrays,
 
 The committed in-memory repositories and static subject directory are test integrations only. The HTTP server accepts injected authentication and repository dependencies; its executable entry point intentionally refuses to start until deployment supplies trusted authentication and durable repositories. No production database or infrastructure is introduced in Phase 3A.
 
+## Billing, Credits, and Usage Ledger
+
+Phase 3B adds schema-versioned billing accounts, integer credit balances, reservations, redacted usage, immutable rate cards, and append-only ledger entries under `packages/contracts`. One credit is 1,000,000 microunits. Token rates are integer microunits per 1,000 tokens; input and output components independently round up with `ceil(tokens × rate / 1000)` before adding an integer fixed request charge. Floating-point credit arithmetic is not permitted.
+
+The separate `services/platform_billing` service exposes authenticated internal `/v1` account, balance, credit, reservation, usage, ledger, rate-card, and health boundaries. Financial mutations use optimistic versions, a scoped immutable-result idempotency ledger, and one UnitOfWork spanning every aggregate and ledger write. The committed thread-safe in-memory repositories support rollback and concurrency tests only; executable startup refuses to select them as production persistence.
+
+The ledger is append-only and derives non-negative available and reserved balances. Every entry type has exact canonical available/reserved deltas, account and tenant binding, a unique ID, and a sequential version; repositories revalidate these invariants on append and derivation. A reservation is created before provider execution, captures redacted token usage only after output safety succeeds, atomically releases unused credit, and releases fully on provider or safety failure. Gateway receipts carry only reservation identity. Gateway-specific methods load the current reservation and balance inside one UnitOfWork, so adapter recreation and unrelated ledger activity cannot create stale lifecycle versions. Retries replay original reservation/capture/release results without duplicate charges, usage events, ledger entries, or successful audit events.
+
+Rate-card versions are immutable and selected with `active_at(usage_occurred_at)`: the newest version whose UTC effective time is not later than the usage time wins, with rate-card ID and version as deterministic tie-breakers across families. Multiple versions in one family at the same effective time are rejected. Future cards never activate early, historical usage keeps its bound version, and all committed prices are illustrative test data, not live commercial pricing.
+
+Billing authorization composes with Phase 3A: platform administrators manage accounts and credits; tenant members need `billing.read`; and only explicitly configured, directory-revalidated internal executors may reserve, capture, or release. Known control-plane denials and missing resources map to stable `403` and `404` responses; unexpected directory or repository faults propagate to one redacted `500 internal_error` audit/response rather than being mislabeled as authorization denial. Unknown and suspended tenants, cross-tenant access, insufficient balances, and closed accounts fail closed. Usage and audit contracts exclude prompts, outputs, bearer tokens, API keys, secrets, request bodies, and payment credentials.
+
+Provider and output-safety failures use an idempotent release operation. If release itself fails, the original failure remains chained for internal recovery, one `billing-compensation-failed` audit event is emitted, callers receive the stable non-sensitive `billing_compensation_failed` code, and the reservation remains discoverable. If provider execution succeeds but capture persistence fails, the in-process execution coordinator retains the completed result for a same-request retry, which retries capture without invoking the provider again. Durable production recovery still requires a transactional outbox/workflow store and reconciliation worker.
+
 ## Validation
 
 ```bash
@@ -49,4 +63,4 @@ python tooling/validate_security.py
 python -m unittest discover -s tests -v
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md), [security baseline](docs/SECURITY.md), [control-plane decision](docs/adr/0003-identity-tenancy-control-plane.md), and [roadmap](docs/ROADMAP.md).
+See [ARCHITECTURE.md](ARCHITECTURE.md), [security baseline](docs/SECURITY.md), [control-plane decision](docs/adr/0003-identity-tenancy-control-plane.md), [billing decision](docs/adr/0004-billing-credits-usage-ledger.md), and [roadmap](docs/ROADMAP.md).

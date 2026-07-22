@@ -12,7 +12,7 @@ from services.ai_gateway.audit import AuditEvent
 from services.ai_gateway.auth import HmacBearerAuthenticator, issue_test_token
 from services.ai_gateway.config import ConfigurationError, load_config
 from services.ai_gateway.content_safety import ConfigContentSafetyAuthorizer
-from services.ai_gateway.providers import ProviderRequest, ProviderResponse
+from services.ai_gateway.providers import ProviderRequest, ProviderResponse, ProviderUsage
 
 ROOT = Path(__file__).resolve().parents[1]
 SIGNING_KEY = "test-signing-key-with-at-least-32-chars"
@@ -26,8 +26,8 @@ class FakeAdapter:
     def execute(self, request: ProviderRequest, timeout_seconds: float) -> ProviderResponse:
         self.calls += 1
         if request.prompt == "produce blocked output":
-            return ProviderResponse("provider-request-unsafe", "blocked-content from provider")
-        return ProviderResponse("provider-request-1", "safe response")
+            return ProviderResponse("provider-request-unsafe", "blocked-content from provider", usage=ProviderUsage(0, 0, 0))
+        return ProviderResponse("provider-request-1", "safe response", usage=ProviderUsage(0, 0, 0))
 
 
 class CaptureAudit:

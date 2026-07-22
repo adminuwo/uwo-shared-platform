@@ -27,4 +27,4 @@ class OpenAIAdapter:
             {"model": provider_model, "input": request.prompt, "store": False},
             timeout_seconds,
         )
-        return parse_responses_payload(payload)
+        return parse_responses_payload(payload, provider_model)

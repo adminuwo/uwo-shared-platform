@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from .base import ProviderError, ProviderResponse
+from .base import ProviderError, ProviderResponse, ProviderUsage
 
 
 def _response_id(payload: Mapping[str, Any]) -> str | None:
@@ -12,7 +12,7 @@ def _response_id(payload: Mapping[str, Any]) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def parse_responses_payload(payload: Mapping[str, Any]) -> ProviderResponse:
+def parse_responses_payload(payload: Mapping[str, Any], provider_model_id: str | None = None) -> ProviderResponse:
     """Extract all output text or fail closed on unsafe/invalid response states."""
 
     if not isinstance(payload, Mapping):
@@ -66,4 +66,15 @@ def parse_responses_payload(payload: Mapping[str, Any]) -> ProviderResponse:
     output_text = "".join(text_parts)
     if not output_text:
         raise ProviderError("provider response contains no output text", code="missing_output", provider_response_id=response_id)
-    return ProviderResponse(provider_request_id=response_id, output_text=output_text)
+    if "usage" not in payload or payload.get("usage") is None:
+        raise ProviderError("provider usage is missing", fallback_allowed=False, code="missing_usage", provider_response_id=response_id)
+    usage = payload["usage"]
+    if not isinstance(usage, Mapping):
+        raise ProviderError("provider usage is malformed", code="malformed_response", provider_response_id=response_id)
+    values = (usage.get("input_tokens"), usage.get("output_tokens"), usage.get("total_tokens"))
+    if not all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in values):
+        raise ProviderError("provider usage token counts are malformed", code="malformed_response", provider_response_id=response_id)
+    input_tokens, output_tokens, total_tokens = values
+    if total_tokens != input_tokens + output_tokens:
+        raise ProviderError("provider usage total is inconsistent", code="malformed_response", provider_response_id=response_id)
+    return ProviderResponse(response_id, output_text, provider_model_id, ProviderUsage(input_tokens, output_tokens, total_tokens))

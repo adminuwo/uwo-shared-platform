@@ -15,7 +15,7 @@
       "id": "shared-contracts",
       "type": "package",
       "path": "packages/contracts",
-      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "ai-gateway-and-model-router"],
+      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "billing-and-credits", "ai-gateway-and-model-router"],
       "endpoints": []
     },
     {
@@ -39,6 +39,28 @@
         "POST /v1/tenants/{tenant_id}/entitlements/models/{model}",
         "DELETE /v1/tenants/{tenant_id}/entitlements/models/{model}",
         "GET /v1/tenants/{tenant_id}/policy-version"
+      ]
+    },
+    {
+      "id": "platform-billing",
+      "type": "service",
+      "path": "services/platform_billing",
+      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "billing-and-credits", "audit", "security"],
+      "endpoints": [
+        "GET /healthz",
+        "POST /v1/billing/accounts",
+        "GET /v1/billing/accounts/{tenant_id}",
+        "POST /v1/billing/accounts/{tenant_id}/status",
+        "GET /v1/billing/accounts/{tenant_id}/balance",
+        "POST /v1/billing/accounts/{tenant_id}/credits/grants",
+        "POST /v1/billing/accounts/{tenant_id}/credits/adjustments",
+        "POST /v1/billing/accounts/{tenant_id}/credits/refunds",
+        "POST /v1/billing/reservations",
+        "POST /v1/billing/reservations/{reservation_id}/capture",
+        "POST /v1/billing/reservations/{reservation_id}/release",
+        "GET /v1/billing/accounts/{tenant_id}/usage/{usage_event_id}",
+        "GET /v1/billing/accounts/{tenant_id}/ledger",
+        "GET /v1/billing/accounts/{tenant_id}/rate-card"
       ]
     }
   ]

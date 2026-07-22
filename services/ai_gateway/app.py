@@ -17,7 +17,7 @@ from packages.contracts import Product
 from .audit import AuditSink, JsonAuditSink, audit_event
 from .auth import AuthenticationError, Authenticator, HmacBearerAuthenticator, VerifiedIdentity
 from .authorization import AuthorizationError, EntitlementAuthorizer
-from .billing import BillingError, ConfigBillingAuthorizer
+from .billing import BillingCompensationError, BillingError, ConfigBillingAuthorizer
 from .config import ConfigurationError, GatewayConfig, load_config
 from .content_safety import ConfigContentSafetyAuthorizer, ContentSafetyAuthorizer, ContentSafetyError
 from .execution import SecureExecutionRequest, SecureExecutionService
@@ -120,6 +120,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.dependencies.audit.emit(audit_event("billing.authorization", request_id, "denied", tenant_id=identity.tenant_id if identity else None, reason_code=exc.code))
             self._error(HTTPStatus.PAYMENT_REQUIRED, exc.code, str(exc), request_id)
             return
+        except BillingCompensationError as exc:
+            self._error(HTTPStatus.SERVICE_UNAVAILABLE, exc.code, str(exc), request_id)
+            return
         except ContentSafetyError as exc:
             self.dependencies.audit.emit(audit_event("content_safety.authorization", request_id, "denied", tenant_id=identity.tenant_id if identity else None, reason_code=exc.code))
             self._error(HTTPStatus.UNPROCESSABLE_ENTITY, exc.code, str(exc), request_id)
@@ -139,6 +142,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             self._error(HTTPStatus.BAD_REQUEST, "invalid_request", str(exc), request_id)
+            return
+        except Exception:
+            self.dependencies.audit.emit(audit_event("request.internal_error", request_id, "failed", tenant_id=identity.tenant_id if identity else None, reason_code="internal_error"))
+            self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_error", "an internal error occurred", request_id)
             return
         self._respond(HTTPStatus.OK, asdict(result), request_id)
 
