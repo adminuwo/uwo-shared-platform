@@ -22,6 +22,14 @@ class ArchitectureTests(unittest.TestCase):
         self.assertIn("billing-and-credits", component["capabilities"])
         self.assertTrue(all(endpoint == "GET /healthz" or "/v1/" in endpoint for endpoint in component["endpoints"]))
 
+    def test_phase3c_services_are_registered_with_versioned_endpoints(self) -> None:
+        manifest = json.loads((Path(__file__).resolve().parents[1] / "architecture/manifest.json").read_text())
+        expected = {"platform-storage", "platform-notifications", "platform-analytics", "platform-audit"}
+        components = {item["id"]: item for item in manifest["components"] if item["id"] in expected}
+        self.assertEqual(set(components), expected)
+        for component in components.values():
+            self.assertTrue(all(endpoint == "GET /healthz" or "/v1/" in endpoint for endpoint in component["endpoints"]))
+
 
 if __name__ == "__main__":
     unittest.main()

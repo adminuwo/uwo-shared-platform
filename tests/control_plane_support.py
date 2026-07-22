@@ -61,7 +61,7 @@ class ControlPlaneFixture:
     audit: CaptureAudit
 
 
-def make_fixture() -> ControlPlaneFixture:
+def make_fixture(event_publisher=None) -> ControlPlaneFixture:
     failures = FailureInjector()
     tenants = InMemoryTenantRepository(failures)
     memberships = InMemoryMembershipRepository()
@@ -84,6 +84,7 @@ def make_fixture() -> ControlPlaneFixture:
         authorizer,
         audit,
         clock=lambda: NOW,
+        event_publisher=event_publisher,
     )
     return ControlPlaneFixture(service, tenants, memberships, roles, entitlements, policies, idempotency, subjects, failures, audit)
 

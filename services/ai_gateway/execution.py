@@ -18,6 +18,7 @@ from .providers import ProviderError, ProviderRequest, ProviderUsage
 from .resilience import ExecutionResult, ResilientProviderExecutor
 from .router import ModelRouter, RouteRequest
 from services.platform_billing.gateway import GatewayBilling
+from services.data_service_common import EventPublisher, NullEventPublisher, platform_event
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,7 @@ class SecureExecutionResult:
 
 
 class SecureExecutionService:
-    def __init__(self, router: ModelRouter, entitlements: EntitlementAuthorizer, billing: BillingAuthorizer, content_safety: ContentSafetyAuthorizer, providers: ResilientProviderExecutor, audit: AuditSink, gateway_billing: GatewayBilling | None = None) -> None:
+    def __init__(self, router: ModelRouter, entitlements: EntitlementAuthorizer, billing: BillingAuthorizer, content_safety: ContentSafetyAuthorizer, providers: ResilientProviderExecutor, audit: AuditSink, gateway_billing: GatewayBilling | None = None, event_publisher: EventPublisher | None = None) -> None:
         self._router = router
         self._entitlements = entitlements
         self._billing = billing
@@ -49,6 +50,7 @@ class SecureExecutionService:
         self._providers = providers
         self._audit = audit
         self._gateway_billing = gateway_billing or AuthorizationOnlyGatewayBilling(billing)
+        self._events = event_publisher or NullEventPublisher()
         self._pending_lock = Lock()
         self._pending_captures: dict[tuple[str, str], tuple[str, ExecutionResult]] = {}
 
@@ -87,6 +89,7 @@ class SecureExecutionService:
             self._gateway_billing.release_on_failure(reservation)
         except Exception as compensation_error:
             self._audit.emit(audit_event("billing-compensation-failed", request.request_id, "failed", tenant_id=request.tenant_id, reason_code="billing_compensation_failed"))
+            self._events.publish(platform_event("billing.reservation-compensation-failed", request.tenant_id, request.request_id, {"reason_code": "billing_compensation_failed", "product": request.product.value, "region": request.region}))
             error = BillingCompensationError()
             error.original_failure = original
             error.compensation_failure = compensation_error
@@ -116,6 +119,7 @@ class SecureExecutionService:
                     raise ProviderError("provider usage is malformed", fallback_allowed=False, code="malformed_response", provider_response_id=result.response.provider_request_id)
                 self._content_safety.authorize_output(identity.tenant_id, request.product, request.model, result.response.output_text, request.request_id)
             except Exception as original:
+                self._events.publish(platform_event("provider.execution.failed", request.tenant_id, request.request_id, {"reason_code": getattr(original, "code", "provider_failure"), "product": request.product.value, "region": request.region, "provider_id": route.provider}))
                 self._compensate(reservation, request, original)
                 raise
         self._remember_pending(request, result)
@@ -137,6 +141,7 @@ class SecureExecutionService:
         )
         self._clear_pending(request)
         self._audit.emit(audit_event("provider.execution", request.request_id, "succeeded", tenant_id=identity.tenant_id, subject=identity.subject, product=request.product.value, model=request.model, provider=result.provider_id))
+        self._events.publish(platform_event("provider.execution.succeeded", request.tenant_id, request.request_id, {"product": request.product.value, "region": request.region, "provider_id": result.provider_id}))
         return SecureExecutionResult(
             request_id=request.request_id,
             provider=result.provider_id,

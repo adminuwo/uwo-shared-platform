@@ -13,6 +13,7 @@ from services.ai_gateway.resilience import ResiliencePolicy, ResilientProviderEx
 from services.ai_gateway.router import ModelRouter
 from services.platform_billing.gateway import ServiceGatewayBilling
 from services.platform_billing.errors import Conflict, RepositoryIntegrityError
+from services.data_service_common import CollectingEventPublisher
 
 from billing_support import EXECUTOR, fund, make_billing_fixture, provision
 from control_plane_support import PLATFORM
@@ -63,10 +64,10 @@ class BillingGatewayIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.fixture = make_billing_fixture(); provision(self.fixture); self.audit = CaptureAudit(); self.config = config()
 
-    def service(self, adapter, lifecycle=None):
+    def service(self, adapter, lifecycle=None, event_publisher=None):
         lifecycle = lifecycle or ServiceGatewayBilling(self.fixture.service, EXECUTOR, 5_000)
         executor = ResilientProviderExecutor({adapter.provider_id: adapter}, ResiliencePolicy(max_attempts=1), sleep=lambda _: None)
-        return SecureExecutionService(ModelRouter(self.config), EntitlementAuthorizer(self.config), ConfigBillingAuthorizer(self.config), ConfigContentSafetyAuthorizer(self.config), executor, self.audit, lifecycle)
+        return SecureExecutionService(ModelRouter(self.config), EntitlementAuthorizer(self.config), ConfigBillingAuthorizer(self.config), ConfigContentSafetyAuthorizer(self.config), executor, self.audit, lifecycle, event_publisher)
 
     def request(self, request_id="req-gateway", prompt="safe"):
         return SecureExecutionRequest(request_id, TENANT, Product.AISA, "uwo-general-v1", "in", prompt)
@@ -98,6 +99,11 @@ class BillingGatewayIntegrationTests(unittest.TestCase):
             self.service(adapter).execute(IDENTITY, self.request("req-failure"))
         balance = self.fixture.service.read_balance(PLATFORM, TENANT, "req-after-failure")
         self.assertEqual((balance.available_microunits, balance.reserved_microunits), (100_000, 0))
+
+    def test_provider_failure_publishes_redacted_platform_event(self):
+        fund(self.fixture); events=CollectingEventPublisher();adapter=Adapter(ProviderError("provider failed",code="provider_unavailable"))
+        with self.assertRaises(Exception):self.service(adapter,event_publisher=events).execute(IDENTITY,self.request("req-published-failure"))
+        self.assertEqual(len(events.events),1);self.assertEqual(events.events[0].event_type,"provider.execution.failed");self.assertNotIn("prompt",events.events[0].attributes)
 
     def test_output_safety_denial_releases_without_charge(self):
         fund(self.fixture)

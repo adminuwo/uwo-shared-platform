@@ -39,6 +39,7 @@ from .repositories import (
     TenantRepository,
     UnitOfWorkFactory,
 )
+from services.data_service_common import EventPublisher, NullEventPublisher, platform_event
 
 TENANT_ADMIN_ROLE = "tenant-admin"
 TENANT_READER_ROLE = "tenant-reader"
@@ -99,6 +100,7 @@ class PlatformControlPlane:
         authorizer: ControlPlaneAuthorizer,
         audit: AuditSink,
         clock: Callable[[], str] = utc_now,
+        event_publisher: EventPublisher | None = None,
     ) -> None:
         self._tenants = tenants
         self._memberships = memberships
@@ -110,6 +112,7 @@ class PlatformControlPlane:
         self._authorizer = authorizer
         self._audit = audit
         self._clock = clock
+        self._events = event_publisher or NullEventPublisher()
 
     def _require(self, identity: VerifiedSubjectIdentity, tenant_id: str, permission: Permission, allow_suspended: bool = False) -> None:
         self._authorizer.require(identity, tenant_id, permission, allow_suspended)
@@ -186,6 +189,7 @@ class PlatformControlPlane:
         updated = replace(current, status=status, updated_at=self._clock(), version=current.version + 1)
         result = self._tenants.update(updated, expected_version)
         self._audit.emit(audit_event("tenant.status_changed", request_id, "succeeded", actor_subject=identity.subject, tenant_id=tenant_id, resource_id=status.value))
+        self._events.publish(platform_event("tenant.status-changed", tenant_id, request_id, {"status": status.value, "region": result.region}))
         return result
 
     def _target_membership(self, tenant_id: str, subject: str) -> TenantMembership:

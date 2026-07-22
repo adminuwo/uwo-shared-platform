@@ -46,6 +46,10 @@ tooling/
 - `services/ai_gateway`: pure routing policy plus HTTP health and route boundaries.
 - `services/platform_control_plane`: isolated identity, tenant, role, and entitlement administration boundaries.
 - `services/platform_billing`: isolated billing-account, credit, reservation, usage, rate-card, and ledger boundaries.
+- `services/platform_storage`: metadata-only object lifecycle, immutable versions, integrity, retention, legal-hold, and provider-neutral blob boundaries.
+- `services/platform_notifications`: immutable templates, preferences, reliable delivery lifecycle, transactional outbox, and provider-neutral notification boundaries.
+- `services/platform_analytics`: privacy-safe allowlisted event ingestion, deterministic aggregate windows, and thresholded snapshots.
+- `services/platform_audit`: durable tenant-scoped hash chains, checkpoints, verification, retention metadata, and evidence exports.
 - `infrastructure/config`: reviewed provider catalog and tenant policies.
 - `architecture/manifest.json`: machine-readable component ownership and capability mapping.
 - `tooling/validate_architecture.py`: manifest-to-contract and filesystem consistency validation.
@@ -70,6 +74,16 @@ Rate cards are immutable versions keyed by product, shared UWO model alias, prov
 
 The Gateway consumes a provider-neutral authorize/reserve/capture/release interface. Reservation occurs after input safety and routing authorization but before provider transport. The receipt is an identity token, not an optimistic-version carrier. Gateway mutations load current reservation and balance state within the same UnitOfWork, then capture and release unused credit atomically; unrelated ledger activity, concurrent reservations, and adapter recreation therefore cannot create stale lifecycle writes. Successful output passes the post-execution safety gate and must include mandatory provider usage before capture. Provider failure, missing usage, or output-safety denial invokes an idempotent release.
 
+Phase 3C separates data-plane support services from tenant administration, billing, and provider execution. Storage records provider-neutral metadata and immutable object versions; raw bytes remain behind `BlobStore`. Restricted and regulated objects require explicit region, retention, and authorized access controls. Download authorization is opaque, short-lived, and unavailable for deleted, checksum-invalid, unscanned, or malware-positive content.
+
+Notifications use immutable template versions and a transactional outbox. A notification and its delivery request commit atomically; provider acceptance precedes acknowledgement; retry timing is deterministic exponential backoff; terminal failure creates a dead-letter record and event. Destinations are opaque references and webhook references require an injected tenant-scoped allowlist.
+
+Analytics events contain a fixed operational schema rather than arbitrary metadata. Append-only unique events aggregate into deterministic half-open UTC windows. Snapshot hashes preserve reproducibility, and exports suppress groups below the configured minimum. Cross-tenant exports require explicit platform-admin authorization.
+
+Durable audit events use explicit scalar fields and tenant-local monotonic sequences. Each SHA-256 hash binds the previous hash and canonical event content. Verification identifies the first invalid sequence; checkpoints and export manifests are immutable integrity evidence. Retention and legal-hold metadata are administrative controls, not delete implementations in the test repository.
+
+Provider-neutral `PlatformEvent` publishers allow the AI Gateway, control plane, billing, storage, notifications, and analytics to feed durable audit and other consumers without depending on an in-memory repository or broker. Business mutation plus outbox insertion is atomic inside Phase 3C UnitOfWork implementations; production backends must retain that guarantee. In-memory repositories, fake blob/provider adapters, and collecting publishers are test-only.
+
 When release fails, execution emits one redacted `billing-compensation-failed` event, returns `billing_compensation_failed`, preserves the original exception as internal cause, and leaves the reservation available for reconciliation. When capture fails after provider success, same-process retries reuse the completed provider result and retry only billing capture. Production replaces this bootstrap recovery cache with durable workflow/outbox state. Control-plane authorization denials and not-found decisions alone translate to billing `403`/`404`; unexpected authorization dependencies propagate to the HTTP boundary as one redacted `500 internal_error`. The usage schema carries only allowlisted identifiers, region, integer token counts, rate-card version, and charge, never prompts or outputs.
 
 ## API Boundaries
@@ -81,8 +95,12 @@ When release fails, execution emits one redacted `billing-compensation-failed` e
 - `/v1/tenants` and tenant-scoped `/v1` subresources provide authenticated tenant lifecycle, membership, role, permission, entitlement, and policy-version administration.
 - `/v1/billing/accounts` and tenant-scoped billing subresources provide authenticated account lifecycle, balances, grants, adjustments, refunds, usage, ledger, and rate-card reads.
 - `/v1/billing/reservations` provides authenticated internal reserve, capture, and release operations for explicitly trusted executors.
+- `/v1/uploads` and `/v1/objects` provide authenticated storage metadata and lifecycle operations.
+- `/v1/templates` and `/v1/notifications` provide authenticated template, preference, enqueue, delivery, retry, cancellation, and status boundaries.
+- `/v1/events` and `/v1/snapshots` on analytics provide allowlisted ingestion and tenant-isolated aggregate reads.
+- `/v1/events`, `/v1/verify`, `/v1/checkpoints`, and `/v1/exports` on audit provide durable append and evidence boundaries.
 
-Every service response carries `X-Request-ID`. Callers may provide a constrained request ID or allow the service to generate one. Control-plane and billing list responses use bounded `limit` and continuation-cursor fields. Billing mutations require an `Idempotency-Key` and explicit optimistic versions.
+Every service response carries `X-Request-ID`. Callers may provide a constrained request ID or allow the service to generate one. List responses use bounded `limit` and continuation-cursor fields. Mutations use scoped `Idempotency-Key` values where replay is supported and explicit optimistic versions for mutable aggregates. Body limits and stable redacted `400/401/403/404/409/413/422/500` errors are enforced at each Phase 3C boundary.
 
 ## Architecture Governance
 

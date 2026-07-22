@@ -116,6 +116,17 @@ class Permission(str, Enum):
     BILLING_READ = "billing.read"
     BILLING_MANAGE = "billing.manage"
     BILLING_EXECUTE = "billing.execute"
+    STORAGE_READ = "storage.read"
+    STORAGE_WRITE = "storage.write"
+    STORAGE_MANAGE = "storage.manage"
+    NOTIFICATIONS_READ = "notifications.read"
+    NOTIFICATIONS_MANAGE = "notifications.manage"
+    NOTIFICATIONS_SEND = "notifications.send"
+    ANALYTICS_READ = "analytics.read"
+    ANALYTICS_INGEST = "analytics.ingest"
+    AUDIT_READ = "audit.read"
+    AUDIT_EXPORT = "audit.export"
+    AUDIT_VERIFY = "audit.verify"
 
 
 @dataclass(frozen=True)

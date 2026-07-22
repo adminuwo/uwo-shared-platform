@@ -65,4 +65,19 @@ Phase 3A does not add production persistence, credentials, or deployment infrast
 
 Phase 3B adds no credentials, payment gateway, production database, or deployment infrastructure.
 
+## Platform data and event controls
+
+- Keep storage metadata, notification lifecycle, analytics, and audit in their separate service boundaries. No HTTP handler accesses global mutable dictionaries, raw blob bytes, provider credentials, or another service's repository.
+- Authorize through Phase 3A permissions. Tenant context selects a resource but never grants authority. Deprovisioned subjects fail immediately; suspended tenants cannot create objects or notifications; tenant reads remain isolated; cross-tenant analytics or audit export is platform-admin only; internal ingestion/delivery requires an explicit executor allowlist.
+- Reject storage objects outside allowed size and region policy. Generate provider keys internally. Require SHA-256 or stronger integrity metadata, append immutable versions, enforce retention and active legal holds, and deny download for deletion, checksum failure, incomplete scanning, or malware. Restricted/regulated content requires explicit region, retention, and access controls.
+- Return only opaque expiring download authorization metadata. Never place raw cloud credentials, signed provider URLs, storage keys, file contents, or authorization tokens in audit/event logs.
+- Keep notification templates immutable by version. Check channel preference and opt-out before enqueue, validate webhook destination references through a tenant allowlist, redact provider responses, cap deterministic retries, and preserve terminal cancellation/suppression/dead-letter states.
+- Commit a business mutation and its outbox record atomically. Use deterministic event IDs, immutable records, optimistic transition versions, acceptance-before-acknowledgement, retry-safe downstream deduplication, and visible poison-event dead letters. Never silently drop events.
+- Analytics accepts fixed operational dimensions only. It excludes prompts, model outputs, message bodies, file content, credentials, payment data, direct personal data, and arbitrary user metadata. Use approved pseudonymous IDs, half-open UTC windows, immutable snapshots, and minimum-count suppression before export.
+- Durable audit accepts explicit allowlisted scalar attributes only and always marks events redacted. Exclude authorization headers, tokens, secrets, bodies, prompts, outputs, notification content, payment data, stack traces, and arbitrary exception text. Hash canonical tenant-scoped events into monotonic chains; verify chains before checkpoints and exports; report integrity failure with stable codes only.
+- HTTP boundaries cap bodies at 65,536 bytes, constrain request/correlation identifiers, return `no-store`, paginate reads, and expose stable redacted status contracts. The HTTP layer owns exactly one denial event; unexpected exceptions become one generic `internal_error` event and response.
+- Committed in-memory repositories, fake blob and notification providers, static allowlists, and collecting publishers are test-only. Executable entry points fail until deployments inject durable regional repositories, managed storage, authenticated provider adapters, and transactional dispatchers.
+
+Phase 3C adds no credentials, cloud storage integration, messaging vendor, broker, production database, or deployment infrastructure. Production requires encryption and regional isolation, workload identity, managed key rotation, malware tooling, approved retention/legal-hold enforcement, durable outbox dispatch and reconciliation, backup/recovery, integrity monitoring, and Phase 3D observability and runbooks.
+
 Report vulnerabilities privately to the repository owners. Do not open public issues containing secrets or exploitable details.

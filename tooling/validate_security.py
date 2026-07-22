@@ -78,6 +78,35 @@ def validate(root: Path = ROOT) -> list[str]:
             present = audit_fields & forbidden_audit_fields
             if present:
                 errors.append(f"billing audit schema contains sensitive fields: {sorted(present)}")
+    phase3c_services = ("platform_storage", "platform_notifications", "platform_analytics", "platform_audit")
+    for service_name in phase3c_services:
+        service_path = root / "services" / service_name
+        if not service_path.is_dir():
+            errors.append(f"missing Phase 3C service: {service_name}")
+            continue
+        app_source = (service_path / "app.py").read_text(encoding="utf-8")
+        if "from .in_memory" in app_source or "InMemory" in app_source or "FakeBlobStore" in app_source or "FakeNotificationProvider" in app_source:
+            errors.append(f"{service_name} HTTP startup must not instantiate test-only integrations")
+        if "requires injected" not in app_source:
+            errors.append(f"{service_name} executable startup must fail until production dependencies are injected")
+    contracts_path = root / "packages/contracts/data_services.py"
+    contracts_source = contracts_path.read_text(encoding="utf-8") if contracts_path.is_file() else ""
+    forbidden_contract_fields = {
+        "prompt", "model_output", "message_body", "file_contents", "bearer_token", "api_key",
+        "provider_secret", "payment_credential", "authorization_header", "request_body", "stack_trace",
+    }
+    if contracts_source and any(f"    {name}:" in contracts_source for name in forbidden_contract_fields):
+        errors.append("Phase 3C contracts contain a forbidden sensitive-data field")
+    if root == ROOT:
+        from packages.contracts.data_services import AUDIT_ATTRIBUTE_ALLOWLIST
+        from services.data_service_common import ServiceAuditEvent
+
+        forbidden_audit_fields = {"authorization", "bearer_token", "prompt", "output", "request_body", "secret", "secret_value", "exception"}
+        present = {item.name for item in fields(ServiceAuditEvent)} & forbidden_audit_fields
+        if present:
+            errors.append(f"Phase 3C audit schema contains sensitive fields: {sorted(present)}")
+        if AUDIT_ATTRIBUTE_ALLOWLIST & forbidden_audit_fields:
+            errors.append("durable audit attribute allowlist contains sensitive fields")
     return errors
 
 

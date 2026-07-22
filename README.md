@@ -55,6 +55,18 @@ Billing authorization composes with Phase 3A: platform administrators manage acc
 
 Provider and output-safety failures use an idempotent release operation. If release itself fails, the original failure remains chained for internal recovery, one `billing-compensation-failed` audit event is emitted, callers receive the stable non-sensitive `billing_compensation_failed` code, and the reservation remains discoverable. If provider execution succeeds but capture persistence fails, the in-process execution coordinator retains the completed result for a same-request retry, which retries capture without invoking the provider again. Durable production recovery still requires a transactional outbox/workflow store and reconciliation worker.
 
+## Platform Data and Event Services
+
+Phase 3C adds four separate internal services. `platform_storage` owns metadata-only object lifecycle and immutable version records behind a provider-neutral `BlobStore`; callers never select storage keys and the repository never stores raw bytes. SHA-2 integrity, size, regional policy, classification, retention, legal hold, deletion, and malware-scan state all fail closed before time-limited opaque download authorization is issued.
+
+`platform_notifications` owns immutable template versions, preferences, delivery lifecycle, deterministic retry, cancellation, suppression, and dead letters. Notification creation and its immutable outbox record share one transaction. Provider adapters return redacted acceptance metadata only; this repository includes deterministic fakes, not email, SMS, WhatsApp, push, or webhook vendor connections. Webhook destinations are opaque references checked by an injected allowlist.
+
+`platform_analytics` accepts only canonical operational dimensions—tenant, product, region, allowlisted event type/outcome, bounded buckets, error code, and approved pseudonymous identifiers. Events append once, UTC windows aggregate deterministically, and low-cardinality groups are suppressed from exports. Prompts, outputs, bodies, file content, credentials, payment data, direct identity, and arbitrary metadata have no contract field.
+
+`platform_audit` allocates monotonic tenant-scoped sequences and links canonical immutable events with SHA-256 previous/current hashes. It supports verification, immutable checkpoints, paginated evidence reads, export manifests, retention, and legal-hold metadata. The allowlisted scalar schema is redacted by construction. Existing gateway, control-plane, and billing boundaries publish provider-neutral events for provider outcomes, tenant status, balance warnings, and compensation failures.
+
+All Phase 3C mutations keep business state and an outbox record in one rollback boundary where downstream delivery applies. Outbox IDs are deterministic, transitions are optimistic-versioned, exact retries do not duplicate downstream acceptance, and poison records become visible dead letters. Committed repositories, blob storage, providers, subject directories, and publishers are thread-safe test integrations only. Every executable entry point refuses to choose them for production.
+
 ## Validation
 
 ```bash
@@ -63,4 +75,4 @@ python tooling/validate_security.py
 python -m unittest discover -s tests -v
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md), [security baseline](docs/SECURITY.md), [control-plane decision](docs/adr/0003-identity-tenancy-control-plane.md), [billing decision](docs/adr/0004-billing-credits-usage-ledger.md), and [roadmap](docs/ROADMAP.md).
+See [ARCHITECTURE.md](ARCHITECTURE.md), [security baseline](docs/SECURITY.md), [control-plane decision](docs/adr/0003-identity-tenancy-control-plane.md), [billing decision](docs/adr/0004-billing-credits-usage-ledger.md), [data-services decision](docs/adr/0005-platform-data-and-event-services.md), and [roadmap](docs/ROADMAP.md).
