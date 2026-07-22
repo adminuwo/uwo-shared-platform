@@ -6,10 +6,16 @@ from services.data_service_common import Conflict, InMemoryOutbox, RepositoryInt
 from .repositories import NotificationPage, ProviderAcceptance
 
 class FakeNotificationProvider:
-    def __init__(self,outcomes:tuple[ProviderAcceptance,...]=()) -> None: self._outcomes=list(outcomes); self.calls:list[str]=[]
-    def deliver(self,notification,template):
-        self.calls.append(notification.notification_id)
-        return self._outcomes.pop(0) if self._outcomes else ProviderAcceptance(True,False,f"provider-{notification.notification_id}",None)
+    def __init__(self,outcomes:tuple[ProviderAcceptance,...]=()) -> None:
+        self._outcomes=list(outcomes); self.calls:list[str]=[]; self.external_deliveries:list[str]=[]; self._accepted={}
+    def deliver(self,notification,template,delivery_key):
+        self.calls.append(delivery_key)
+        if delivery_key in self._accepted:
+            return self._accepted[delivery_key]
+        result=self._outcomes.pop(0) if self._outcomes else ProviderAcceptance(True,False,f"provider-{notification.notification_id}",None)
+        if result.accepted:
+            self._accepted[delivery_key]=result; self.external_deliveries.append(delivery_key)
+        return result
 
 class StaticWebhookAllowlist:
     def __init__(self,allowed:frozenset[tuple[str,str]])->None: self.allowed=allowed
@@ -43,6 +49,7 @@ class _Templates:
         if k in self.s.template_versions: raise Conflict("duplicate_template_version","template version exists")
         self.s.template_versions[k]=v; return v
     def get_version(self,t,n): return self.s.template_versions.get((t,n))
+    def max_version(self,t): return max((number for template_id,number in self.s.template_versions if template_id==t),default=0)
 class _Notifications:
     def __init__(self,s): self.s=s
     def create(self,v):
@@ -61,7 +68,7 @@ class _Notifications:
     def get_by_dedup(self,tenant_id,key): return next((x for x in self.s.notifications.values() if x.tenant_id==tenant_id and x.deduplication_key==key),None)
 class _Attempts:
     def __init__(self,s): self.s=s
-    def append(self,v): self.s.attempts[v.attempt_id]=v; return v
+    def append(self,v): self.s._fail("attempt"); self.s.attempts[v.attempt_id]=v; return v
     def list(self,k): return tuple(sorted((x for x in self.s.attempts.values() if x.notification_id==k),key=lambda x:x.attempt_number))
 class _Preferences:
     def __init__(self,s): self.s=s

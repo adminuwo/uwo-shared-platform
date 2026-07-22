@@ -45,7 +45,7 @@ from .repositories import (
     UnitOfWorkFactory,
     UsageEventRepository,
 )
-from services.data_service_common import EventPublisher, NullEventPublisher, platform_event
+from services.data_service_common import EventRecorder, NullEventRecorder, platform_event, record_event_safely
 
 T = TypeVar("T")
 
@@ -89,7 +89,7 @@ class PlatformBillingService:
         authorizer: BillingAuthorizer,
         audit: AuditSink,
         clock: Callable[[], str] = utc_now,
-        event_publisher: EventPublisher | None = None,
+        event_recorder: EventRecorder | None = None,
     ) -> None:
         self._tenants = tenants
         self._accounts = accounts
@@ -101,7 +101,7 @@ class PlatformBillingService:
         self._authorizer = authorizer
         self._audit = audit
         self._clock = clock
-        self._events = event_publisher or NullEventPublisher()
+        self._events = event_recorder or NullEventRecorder()
 
     @staticmethod
     def _scope(operation: str, tenant_id: str, identity: VerifiedSubjectIdentity) -> IdempotencyScope:
@@ -252,7 +252,7 @@ class PlatformBillingService:
         balance = self._ledger.balance(account.account_id, tenant_id, self._clock())
         if balance.available_microunits < amount_microunits:
             self._audit.emit(audit_event("billing.insufficient_balance", request_id, "denied", actor_subject=identity.subject, tenant_id=tenant_id, account_id=account.account_id, reason_code="insufficient_balance"))
-            self._events.publish(platform_event("billing.balance-low", tenant_id, request_id, {"reason_code": "insufficient_balance"}))
+            record_event_safely(self._events, platform_event("billing.balance-low", tenant_id, request_id, {"reason_code": "insufficient_balance"}))
             raise PaymentRequired("insufficient_balance", "available credit balance is insufficient")
         return BillingDecision(_id("decision", request_id), tenant_id, True, amount_microunits, "authorized", self._clock())
 

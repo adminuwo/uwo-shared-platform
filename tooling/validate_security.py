@@ -99,7 +99,7 @@ def validate(root: Path = ROOT) -> list[str]:
         errors.append("Phase 3C contracts contain a forbidden sensitive-data field")
     if root == ROOT:
         from packages.contracts.data_services import AUDIT_ATTRIBUTE_ALLOWLIST
-        from services.data_service_common import ServiceAuditEvent
+        from services.data_service_common import EVENT_ATTRIBUTE_ALLOWLIST, ServiceAuditEvent
 
         forbidden_audit_fields = {"authorization", "bearer_token", "prompt", "output", "request_body", "secret", "secret_value", "exception"}
         present = {item.name for item in fields(ServiceAuditEvent)} & forbidden_audit_fields
@@ -107,6 +107,8 @@ def validate(root: Path = ROOT) -> list[str]:
             errors.append(f"Phase 3C audit schema contains sensitive fields: {sorted(present)}")
         if AUDIT_ATTRIBUTE_ALLOWLIST & forbidden_audit_fields:
             errors.append("durable audit attribute allowlist contains sensitive fields")
+        if EVENT_ATTRIBUTE_ALLOWLIST & forbidden_audit_fields:
+            errors.append("platform event attribute allowlist contains sensitive fields")
     return errors
 
 

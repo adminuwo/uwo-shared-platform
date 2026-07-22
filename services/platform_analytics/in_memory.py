@@ -1,6 +1,7 @@
 """Thread-safe rollback-capable analytics test repositories."""
 from __future__ import annotations
 from threading import RLock
+from datetime import datetime
 from services.data_service_common import Conflict,InMemoryOutbox,RepositoryIntegrityError
 class InMemoryAnalyticsState:
     def __init__(self): self.events={}; self.snapshots={}; self.idempotency={}; self.outbox=InMemoryOutbox(); self.lock=RLock(); self.fail_next=None
@@ -15,7 +16,9 @@ class _Events:
         if old is not None and old!=v: raise Conflict("event_id_conflict","event ID identifies different content")
         self.s.events[v.event_id]=v; return old or v
     def get(self,k): return self.s.events.get(k)
-    def range(self,t,start,end): return tuple(sorted((x for x in self.s.events.values() if x.tenant_id==t and start<=x.occurred_at<end),key=lambda x:(x.occurred_at,x.event_id)))
+    def range(self,t,start,end):
+        begin=datetime.fromisoformat(start.replace("Z","+00:00"));finish=datetime.fromisoformat(end.replace("Z","+00:00"))
+        return tuple(sorted((x for x in self.s.events.values() if x.tenant_id==t and begin<=datetime.fromisoformat(x.occurred_at.replace("Z","+00:00"))<finish),key=lambda x:(datetime.fromisoformat(x.occurred_at.replace("Z","+00:00")),x.event_id)))
 class _Snapshots:
     def __init__(self,s):self.s=s
     def put(self,v):

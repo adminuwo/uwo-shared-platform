@@ -30,6 +30,7 @@ def handler(service_name:str,authenticator:Authenticator,audit:AuditSink,router:
             if status is HTTPStatus.UNAUTHORIZED:self.send_header("WWW-Authenticate",f'Bearer realm="{service_name}"')
             self.end_headers();self.wfile.write(payload)
         def _error(self,status,code,message,rid):self._respond(status,{"error":{"code":code,"message":message},"request_id":rid},rid)
+        def _audit_denial(self,rid,identity,code):audit.emit(ServiceAuditEvent(f"{service_name}.administration_denied",rid,"denied",actor_subject=identity.subject if identity else None,reason_code=code))
         def _body(self):
             if self.command in {"GET","DELETE"}:return None
             try:length=int(self.headers.get("Content-Length","0"))
@@ -47,13 +48,14 @@ def handler(service_name:str,authenticator:Authenticator,audit:AuditSink,router:
             identity=None
             try:
                 identity=authenticator.authenticate(self.headers.get("Authorization",""));parts=[unquote(x) for x in parsed.path.strip("/").split("/")];result,status=router(self.command,parts,parse_qs(parsed.query,keep_blank_values=True),self._body(),identity,rid,self.headers.get("Idempotency-Key"));self._respond(status,{"data":result,"request_id":rid},rid)
-            except AuthenticationError as exc:audit.emit(ServiceAuditEvent(f"{service_name}.administration_denied",rid,"denied",reason_code=exc.code));self._error(HTTPStatus.UNAUTHORIZED,exc.code,str(exc),rid)
-            except AuthorizationDenied as exc:audit.emit(ServiceAuditEvent(f"{service_name}.administration_denied",rid,"denied",actor_subject=identity.subject if identity else None,reason_code=exc.code));self._error(HTTPStatus.FORBIDDEN,exc.code,str(exc),rid)
-            except ResourceNotFound as exc:self._error(HTTPStatus.NOT_FOUND,exc.code,str(exc),rid)
-            except Conflict as exc:self._error(HTTPStatus.CONFLICT,exc.code,str(exc),rid)
-            except PolicyViolation as exc:self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE if exc.code=="request_too_large" else HTTPStatus.UNPROCESSABLE_ENTITY,exc.code,str(exc),rid)
-            except InvalidRequest as exc:self._error(HTTPStatus.NOT_FOUND if exc.code=="unknown_route" else HTTPStatus.BAD_REQUEST,exc.code,str(exc),rid)
-            except (TypeError,ValueError):self._error(HTTPStatus.BAD_REQUEST,"invalid_request","request contains invalid values",rid)
+            except AuthenticationError as exc:self._audit_denial(rid,identity,exc.code);self._error(HTTPStatus.UNAUTHORIZED,exc.code,str(exc),rid)
+            except AuthorizationDenied as exc:self._audit_denial(rid,identity,exc.code);self._error(HTTPStatus.FORBIDDEN,exc.code,str(exc),rid)
+            except ResourceNotFound as exc:self._audit_denial(rid,identity,exc.code);self._error(HTTPStatus.NOT_FOUND,exc.code,str(exc),rid)
+            except Conflict as exc:self._audit_denial(rid,identity,exc.code);self._error(HTTPStatus.CONFLICT,exc.code,str(exc),rid)
+            except InfrastructureUnavailable as exc:audit.emit(ServiceAuditEvent(f"{service_name}.infrastructure_failure",rid,"failed",actor_subject=identity.subject if identity else None,reason_code=exc.code));self._error(HTTPStatus.SERVICE_UNAVAILABLE,exc.code,"a required service integration is unavailable",rid)
+            except PolicyViolation as exc:self._audit_denial(rid,identity,exc.code);self._error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE if exc.code=="request_too_large" else HTTPStatus.UNPROCESSABLE_ENTITY,exc.code,str(exc),rid)
+            except InvalidRequest as exc:self._audit_denial(rid,identity,exc.code);self._error(HTTPStatus.NOT_FOUND if exc.code=="unknown_route" else HTTPStatus.BAD_REQUEST,exc.code,str(exc),rid)
+            except (TypeError,ValueError):self._audit_denial(rid,identity,"invalid_request");self._error(HTTPStatus.BAD_REQUEST,"invalid_request","request contains invalid values",rid)
             except Exception:audit.emit(ServiceAuditEvent(f"{service_name}.internal_error",rid,"failed",actor_subject=identity.subject if identity else None,reason_code="internal_error"));self._error(HTTPStatus.INTERNAL_SERVER_ERROR,"internal_error","an internal error occurred",rid)
         do_GET=_route;do_POST=_route;do_PUT=_route;do_PATCH=_route;do_DELETE=_route
         def log_message(self,format,*args):return

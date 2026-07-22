@@ -5,11 +5,11 @@ from services.data_service_common import Conflict,InMemoryOutbox,RepositoryInteg
 from .repositories import AuditPage
 ZERO_HASH="0"*64
 class InMemoryAuditState:
-    def __init__(self): self.events={};self.checkpoints={};self.exports={};self.retentions={};self.outbox=InMemoryOutbox();self.lock=RLock();self.fail_next=None
+    def __init__(self): self.events={};self.checkpoints={};self.exports={};self.retentions={};self.source_events={};self.outbox=InMemoryOutbox();self.lock=RLock();self.fail_next=None
     def _fail(self,op):
         if self.fail_next==op:self.fail_next=None;raise RepositoryIntegrityError(f"injected {op} failure")
-    def snapshot(self):return {tenant:list(events) for tenant,events in self.events.items()},dict(self.checkpoints),dict(self.exports),dict(self.retentions),self.outbox.snapshot()
-    def restore(self,s):self.events,self.checkpoints,self.exports,self.retentions,out=s;self.outbox.restore(out)
+    def snapshot(self):return {tenant:list(events) for tenant,events in self.events.items()},dict(self.checkpoints),dict(self.exports),dict(self.retentions),dict(self.source_events),self.outbox.snapshot()
+    def restore(self,s):self.events,self.checkpoints,self.exports,self.retentions,self.source_events,out=s;self.outbox.restore(out)
 class _Stream:
     def __init__(self,s):self.s=s
     def next_sequence(self,t):
@@ -38,8 +38,14 @@ class _Retention:
         if old and old.version!=expected:raise Conflict("stale_version","audit retention version is stale")
         self.s.retentions[v.tenant_id]=v;return v
     def get(self,k):return self.s.retentions.get(k)
+class _SourceEvents:
+    def __init__(self,s):self.s=s
+    def get(self,k):return self.s.source_events.get(k)
+    def put(self,event_id,fingerprint,result):
+        if event_id in self.s.source_events:raise Conflict("source_event_conflict","source event ID already exists")
+        self.s.source_events[event_id]=(fingerprint,result)
 class InMemoryAuditUnitOfWork:
-    def __init__(self,s):self.s=s;self.stream=_Stream(s);self.checkpoints=_Checkpoints(s);self.exports=_Exports(s);self.retention=_Retention(s);self.outbox=s.outbox;self._committed=False
+    def __init__(self,s):self.s=s;self.stream=_Stream(s);self.checkpoints=_Checkpoints(s);self.exports=_Exports(s);self.retention=_Retention(s);self.source_events=_SourceEvents(s);self.outbox=s.outbox;self._committed=False
     def __enter__(self):self.s.lock.acquire();self._snapshot=self.s.snapshot();return self
     def commit(self):self._committed=True
     def __exit__(self,*args):

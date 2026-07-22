@@ -111,6 +111,26 @@ class MalwareScanStatus(str, Enum):
 
 
 @dataclass(frozen=True)
+class MalwareScanResult:
+    scan_result_id: str
+    object_version_id: str
+    object_id: str
+    tenant_id: str
+    product: Product
+    region: str
+    status: MalwareScanStatus
+    scanned_at: str
+    scanner_reference: str
+    schema_version: str = SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        _base(self.schema_version, {"scan_result_id": self.scan_result_id, "object_version_id": self.object_version_id, "object_id": self.object_id, "scanner_reference": self.scanner_reference}, {"scanned_at": self.scanned_at})
+        _context(self.tenant_id, self.product, self.region)
+        if not isinstance(self.status, MalwareScanStatus):
+            raise ValueError("status must be a MalwareScanStatus")
+
+
+@dataclass(frozen=True)
 class ContentIntegrityMetadata:
     algorithm: str
     digest: str
@@ -437,7 +457,9 @@ class AggregationWindow:
 
     def __post_init__(self) -> None:
         _base(self.schema_version, {}, {"start_at": self.start_at, "end_at": self.end_at})
-        if self.start_at >= self.end_at: raise ValueError("aggregation window start must precede end")
+        start = datetime.fromisoformat(self.start_at.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(self.end_at.replace("Z", "+00:00"))
+        if start >= end: raise ValueError("aggregation window start must precede end")
 
 
 @dataclass(frozen=True)

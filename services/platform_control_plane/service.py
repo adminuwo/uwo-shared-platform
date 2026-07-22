@@ -39,7 +39,7 @@ from .repositories import (
     TenantRepository,
     UnitOfWorkFactory,
 )
-from services.data_service_common import EventPublisher, NullEventPublisher, platform_event
+from services.data_service_common import OutboxRecord, OutboxStatus, deterministic_id, platform_event
 
 TENANT_ADMIN_ROLE = "tenant-admin"
 TENANT_READER_ROLE = "tenant-reader"
@@ -100,7 +100,6 @@ class PlatformControlPlane:
         authorizer: ControlPlaneAuthorizer,
         audit: AuditSink,
         clock: Callable[[], str] = utc_now,
-        event_publisher: EventPublisher | None = None,
     ) -> None:
         self._tenants = tenants
         self._memberships = memberships
@@ -112,7 +111,6 @@ class PlatformControlPlane:
         self._authorizer = authorizer
         self._audit = audit
         self._clock = clock
-        self._events = event_publisher or NullEventPublisher()
 
     def _require(self, identity: VerifiedSubjectIdentity, tenant_id: str, permission: Permission, allow_suspended: bool = False) -> None:
         self._authorizer.require(identity, tenant_id, permission, allow_suspended)
@@ -186,10 +184,17 @@ class PlatformControlPlane:
             self._require(identity, tenant_id, Permission.TENANT_MANAGE)
         if current.status is status:
             raise Conflict("status_unchanged", "tenant already has the requested status")
-        updated = replace(current, status=status, updated_at=self._clock(), version=current.version + 1)
-        result = self._tenants.update(updated, expected_version)
+        timestamp = self._clock()
+        event = platform_event("tenant.status-changed", tenant_id, request_id, {"status": status.value, "region": current.region}, timestamp)
+        with self._unit_of_work() as transaction:
+            transactional_current = transaction.tenants.get(tenant_id)
+            if transactional_current is None:
+                raise ResourceNotFound("unknown_tenant", "tenant does not exist")
+            updated = replace(transactional_current, status=status, updated_at=timestamp, version=transactional_current.version + 1)
+            result = transaction.tenants.update(updated, expected_version)
+            transaction.outbox.enqueue(OutboxRecord(deterministic_id("outbox", event.event_id), event, OutboxStatus.PENDING, 0, None, 1))
+            transaction.commit()
         self._audit.emit(audit_event("tenant.status_changed", request_id, "succeeded", actor_subject=identity.subject, tenant_id=tenant_id, resource_id=status.value))
-        self._events.publish(platform_event("tenant.status-changed", tenant_id, request_id, {"status": status.value, "region": result.region}))
         return result
 
     def _target_membership(self, tenant_id: str, subject: str) -> TenantMembership:

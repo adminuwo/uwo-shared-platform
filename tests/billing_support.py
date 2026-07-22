@@ -56,7 +56,7 @@ class BillingFixture:
     audit: CaptureBillingAudit
 
 
-def make_billing_fixture(*, clock=lambda: NOW, rate_card_values: tuple[RateCard, ...] | None = None, event_publisher=None) -> BillingFixture:
+def make_billing_fixture(*, clock=lambda: NOW, rate_card_values: tuple[RateCard, ...] | None = None, event_recorder=None) -> BillingFixture:
     control = make_fixture()
     control.subjects.provision(EXECUTOR.subject)
     failures = FailureInjector()
@@ -69,7 +69,7 @@ def make_billing_fixture(*, clock=lambda: NOW, rate_card_values: tuple[RateCard,
     audit = CaptureBillingAudit()
     authorizer = BillingAuthorizer(control.tenants, control.subjects, control.service._authorizer, frozenset({EXECUTOR.subject}))
     unit_of_work = InMemoryBillingUnitOfWorkFactory(accounts, ledger, reservations, usage, rate_cards, idempotency)
-    service = PlatformBillingService(control.tenants, accounts, ledger, reservations, usage, rate_cards, unit_of_work, authorizer, audit, clock=clock, event_publisher=event_publisher)
+    service = PlatformBillingService(control.tenants, accounts, ledger, reservations, usage, rate_cards, unit_of_work, authorizer, audit, clock=clock, event_recorder=event_recorder)
     return BillingFixture(service, control, accounts, ledger, reservations, usage, rate_cards, idempotency, failures, audit)
 
 

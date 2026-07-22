@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from threading import Lock
+from typing import Protocol
 
 from packages.contracts import Product
 
@@ -18,7 +19,7 @@ from .providers import ProviderError, ProviderRequest, ProviderUsage
 from .resilience import ExecutionResult, ResilientProviderExecutor
 from .router import ModelRouter, RouteRequest
 from services.platform_billing.gateway import GatewayBilling
-from services.data_service_common import EventPublisher, NullEventPublisher, platform_event
+from services.data_service_common import EventRecorder, NullEventRecorder, platform_event, record_event_safely
 
 
 @dataclass(frozen=True)
@@ -41,8 +42,61 @@ class SecureExecutionResult:
     provider_request_id: str | None
 
 
+@dataclass(frozen=True)
+class ExecutionOutcome:
+    """Durable provider outcome used to resume capture without re-execution."""
+
+    fingerprint: str
+    result: ExecutionResult
+    captured: bool = False
+
+
+class ExecutionOutcomeStore(Protocol):
+    def get(self, tenant_id: str, request_id: str) -> ExecutionOutcome | None: ...
+    def remember_provider_result(self, tenant_id: str, request_id: str, fingerprint: str, result: ExecutionResult) -> ExecutionOutcome: ...
+    def mark_captured(self, tenant_id: str, request_id: str, fingerprint: str) -> ExecutionOutcome: ...
+
+
+class InMemoryExecutionOutcomeStore:
+    """Thread-safe test implementation; production must provide durable storage."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._records: dict[tuple[str, str], ExecutionOutcome] = {}
+
+    def get(self, tenant_id: str, request_id: str) -> ExecutionOutcome | None:
+        with self._lock:
+            return self._records.get((tenant_id, request_id))
+
+    def remember_provider_result(self, tenant_id: str, request_id: str, fingerprint: str, result: ExecutionResult) -> ExecutionOutcome:
+        key = (tenant_id, request_id)
+        with self._lock:
+            existing = self._records.get(key)
+            if existing is not None:
+                if existing.fingerprint != fingerprint or existing.result != result:
+                    raise BillingError("idempotency_conflict", "request ID was reused with different execution input")
+                return existing
+            value = ExecutionOutcome(fingerprint, result)
+            self._records[key] = value
+            return value
+
+    def mark_captured(self, tenant_id: str, request_id: str, fingerprint: str) -> ExecutionOutcome:
+        key = (tenant_id, request_id)
+        with self._lock:
+            existing = self._records.get(key)
+            if existing is None:
+                raise BillingError("execution_outcome_missing", "provider outcome is unavailable")
+            if existing.fingerprint != fingerprint:
+                raise BillingError("idempotency_conflict", "request ID was reused with different execution input")
+            if existing.captured:
+                return existing
+            value = ExecutionOutcome(existing.fingerprint, existing.result, True)
+            self._records[key] = value
+            return value
+
+
 class SecureExecutionService:
-    def __init__(self, router: ModelRouter, entitlements: EntitlementAuthorizer, billing: BillingAuthorizer, content_safety: ContentSafetyAuthorizer, providers: ResilientProviderExecutor, audit: AuditSink, gateway_billing: GatewayBilling | None = None, event_publisher: EventPublisher | None = None) -> None:
+    def __init__(self, router: ModelRouter, entitlements: EntitlementAuthorizer, billing: BillingAuthorizer, content_safety: ContentSafetyAuthorizer, providers: ResilientProviderExecutor, audit: AuditSink, gateway_billing: GatewayBilling | None = None, event_recorder: EventRecorder | None = None, outcomes: ExecutionOutcomeStore | None = None) -> None:
         self._router = router
         self._entitlements = entitlements
         self._billing = billing
@@ -50,13 +104,15 @@ class SecureExecutionService:
         self._providers = providers
         self._audit = audit
         self._gateway_billing = gateway_billing or AuthorizationOnlyGatewayBilling(billing)
-        self._events = event_publisher or NullEventPublisher()
+        self._events = event_recorder or NullEventRecorder()
+        self._outcomes = outcomes or InMemoryExecutionOutcomeStore()
         self._pending_lock = Lock()
         self._pending_captures: dict[tuple[str, str], tuple[str, ExecutionResult]] = {}
 
     @staticmethod
-    def _fingerprint(request: SecureExecutionRequest) -> str:
+    def _fingerprint(request: SecureExecutionRequest, actor_subject: str) -> str:
         value = {
+            "actor_subject": actor_subject,
             "tenant_id": request.tenant_id,
             "product": request.product.value,
             "model": request.model,
@@ -65,9 +121,8 @@ class SecureExecutionService:
         }
         return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
-    def _pending(self, request: SecureExecutionRequest) -> ExecutionResult | None:
+    def _pending(self, request: SecureExecutionRequest, fingerprint: str) -> ExecutionResult | None:
         key = (request.tenant_id, request.request_id)
-        fingerprint = self._fingerprint(request)
         with self._pending_lock:
             pending = self._pending_captures.get(key)
             if pending is None:
@@ -76,9 +131,9 @@ class SecureExecutionService:
                 raise BillingError("idempotency_conflict", "request ID was reused with different execution input")
             return pending[1]
 
-    def _remember_pending(self, request: SecureExecutionRequest, result: ExecutionResult) -> None:
+    def _remember_pending(self, request: SecureExecutionRequest, fingerprint: str, result: ExecutionResult) -> None:
         with self._pending_lock:
-            self._pending_captures[(request.tenant_id, request.request_id)] = (self._fingerprint(request), result)
+            self._pending_captures[(request.tenant_id, request.request_id)] = (fingerprint, result)
 
     def _clear_pending(self, request: SecureExecutionRequest) -> None:
         with self._pending_lock:
@@ -89,11 +144,22 @@ class SecureExecutionService:
             self._gateway_billing.release_on_failure(reservation)
         except Exception as compensation_error:
             self._audit.emit(audit_event("billing-compensation-failed", request.request_id, "failed", tenant_id=request.tenant_id, reason_code="billing_compensation_failed"))
-            self._events.publish(platform_event("billing.reservation-compensation-failed", request.tenant_id, request.request_id, {"reason_code": "billing_compensation_failed", "product": request.product.value, "region": request.region}))
+            record_event_safely(self._events, platform_event("billing.reservation-compensation-failed", request.tenant_id, request.request_id, {"reason_code": "billing_compensation_failed", "product": request.product.value, "region": request.region}))
             error = BillingCompensationError()
             error.original_failure = original
             error.compensation_failure = compensation_error
             raise error from original
+
+    @staticmethod
+    def _public_result(request: SecureExecutionRequest, result: ExecutionResult) -> SecureExecutionResult:
+        return SecureExecutionResult(
+            request_id=request.request_id,
+            provider=result.provider_id,
+            model=request.model,
+            region=request.region,
+            output_text=result.response.output_text,
+            provider_request_id=result.response.provider_request_id,
+        )
 
     def authorize_route(self, identity: VerifiedIdentity, request: RouteRequest, request_id: str) -> None:
         self._entitlements.authorize(identity, request.tenant_id, request.product, request.model)
@@ -101,11 +167,18 @@ class SecureExecutionService:
 
     def execute(self, identity: VerifiedIdentity, request: SecureExecutionRequest) -> SecureExecutionResult:
         self._entitlements.authorize(identity, request.tenant_id, request.product, request.model)
+        fingerprint = self._fingerprint(request, identity.subject)
+        stored = self._outcomes.get(request.tenant_id, request.request_id)
+        if stored is not None:
+            if stored.fingerprint != fingerprint:
+                raise BillingError("idempotency_conflict", "request ID was reused with different execution input")
+            if stored.captured:
+                return self._public_result(request, stored.result)
         self._gateway_billing.authorize_estimated_charge(identity.tenant_id, request.product, request.model, request.request_id)
         self._content_safety.authorize_input(identity.tenant_id, request.product, request.model, request.prompt, request.request_id)
         route = self._router.route(RouteRequest(request.tenant_id, request.product, request.model, request.region))
         reservation = self._gateway_billing.reserve(identity.tenant_id, request.product, request.model, request.request_id)
-        result = self._pending(request)
+        result = stored.result if stored is not None else self._pending(request, fingerprint)
         if result is None:
             self._audit.emit(audit_event("provider.execution", request.request_id, "started", tenant_id=identity.tenant_id, subject=identity.subject, product=request.product.value, model=request.model, provider=route.provider))
             try:
@@ -119,10 +192,11 @@ class SecureExecutionService:
                     raise ProviderError("provider usage is malformed", fallback_allowed=False, code="malformed_response", provider_response_id=result.response.provider_request_id)
                 self._content_safety.authorize_output(identity.tenant_id, request.product, request.model, result.response.output_text, request.request_id)
             except Exception as original:
-                self._events.publish(platform_event("provider.execution.failed", request.tenant_id, request.request_id, {"reason_code": getattr(original, "code", "provider_failure"), "product": request.product.value, "region": request.region, "provider_id": route.provider}))
+                record_event_safely(self._events, platform_event("provider.execution.failed", request.tenant_id, request.request_id, {"reason_code": getattr(original, "code", "provider_failure"), "product": request.product.value, "region": request.region, "provider_id": route.provider}))
                 self._compensate(reservation, request, original)
                 raise
-        self._remember_pending(request, result)
+        self._remember_pending(request, fingerprint, result)
+        self._outcomes.remember_provider_result(request.tenant_id, request.request_id, fingerprint, result)
         usage = result.response.usage
         if usage is None or not isinstance(usage, ProviderUsage):  # Defensive guard for externally supplied results.
             code = "missing_usage" if usage is None else "malformed_response"
@@ -139,14 +213,8 @@ class SecureExecutionService:
             usage.output_tokens,
             usage.total_tokens,
         )
+        self._outcomes.mark_captured(request.tenant_id, request.request_id, fingerprint)
         self._clear_pending(request)
         self._audit.emit(audit_event("provider.execution", request.request_id, "succeeded", tenant_id=identity.tenant_id, subject=identity.subject, product=request.product.value, model=request.model, provider=result.provider_id))
-        self._events.publish(platform_event("provider.execution.succeeded", request.tenant_id, request.request_id, {"product": request.product.value, "region": request.region, "provider_id": result.provider_id}))
-        return SecureExecutionResult(
-            request_id=request.request_id,
-            provider=result.provider_id,
-            model=request.model,
-            region=request.region,
-            output_text=result.response.output_text,
-            provider_request_id=result.response.provider_request_id,
-        )
+        record_event_safely(self._events, platform_event("provider.execution.succeeded", request.tenant_id, request.request_id, {"product": request.product.value, "region": request.region, "provider_id": result.provider_id}))
+        return self._public_result(request, result)

@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 from threading import RLock
 from typing import Any
-from packages.contracts import LegalHold, ObjectVersion, RetentionPolicy, StoredObject, UploadSession
+from packages.contracts import LegalHold, MalwareScanResult, ObjectVersion, RetentionPolicy, StoredObject, UploadSession
 from services.data_service_common import Conflict, InMemoryOutbox, RepositoryIntegrityError
 from .repositories import BlobMetadata, ObjectPage
 
@@ -19,12 +19,12 @@ class FakeBlobStore:
 class InMemoryStorageRepository:
     def __init__(self) -> None:
         self.objects: dict[str, StoredObject] = {}; self.versions: dict[str, ObjectVersion] = {}; self.uploads: dict[str, UploadSession] = {}
-        self.retentions: dict[str, RetentionPolicy] = {}; self.holds: dict[str, LegalHold] = {}; self.idempotency: dict[tuple[tuple[str,str,str],str], tuple[str,Any]] = {}
+        self.retentions: dict[str, RetentionPolicy] = {}; self.holds: dict[str, LegalHold] = {}; self.scans: dict[str, MalwareScanResult] = {}; self.idempotency: dict[tuple[tuple[str,str,str],str], tuple[str,Any]] = {}
         self.outbox = InMemoryOutbox(); self.lock = RLock(); self.fail_next: str | None = None
     def _fail(self, operation: str) -> None:
         if self.fail_next == operation: self.fail_next = None; raise RepositoryIntegrityError(f"injected {operation} failure")
-    def snapshot(self): return (dict(self.objects),dict(self.versions),dict(self.uploads),dict(self.retentions),dict(self.holds),dict(self.idempotency),self.outbox.snapshot())
-    def restore(self,s): self.objects,self.versions,self.uploads,self.retentions,self.holds,self.idempotency,outbox=s; self.outbox.restore(outbox)
+    def snapshot(self): return (dict(self.objects),dict(self.versions),dict(self.uploads),dict(self.retentions),dict(self.holds),dict(self.scans),dict(self.idempotency),self.outbox.snapshot())
+    def restore(self,s): self.objects,self.versions,self.uploads,self.retentions,self.holds,self.scans,self.idempotency,outbox=s; self.outbox.restore(outbox)
 
 class _Objects:
     def __init__(self,s): self.s=s
@@ -51,9 +51,12 @@ class _Versions:
         self.s.versions[v.object_version_id]=v; return v
     def get(self,k): return self.s.versions.get(k)
     def get_number(self,object_id,version_number): return next((x for x in self.s.versions.values() if x.object_id==object_id and x.version_number==version_number),None)
-    def replace_scan_status(self,v):
-        if v.object_version_id not in self.s.versions: raise Conflict("unknown_object_version","object version does not exist")
-        self.s.versions[v.object_version_id]=v; return v
+class _Scans:
+    def __init__(self,s): self.s=s
+    def append(self,v):
+        if v.scan_result_id in self.s.scans: raise Conflict("duplicate_scan_result","scan result already exists")
+        self.s.scans[v.scan_result_id]=v; return v
+    def list(self,k): return tuple(sorted((x for x in self.s.scans.values() if x.object_version_id==k),key=lambda x:(x.scanned_at,x.scan_result_id)))
 
 class _Uploads:
     def __init__(self,s): self.s=s
@@ -70,7 +73,10 @@ class _Uploads:
 
 class _Policies:
     def __init__(self,s): self.s=s
-    def put_retention(self,v): self.s.retentions[v.object_id]=v; return v
+    def put_retention(self,v,expected_version):
+        old=self.s.retentions.get(v.object_id); current=old.version if old else 0
+        if current!=expected_version: raise Conflict("stale_version","retention policy version is stale")
+        self.s.retentions[v.object_id]=v; return v
     def get_retention(self,k): return self.s.retentions.get(k)
     def put_hold(self,v): self.s.holds[v.object_id]=v; return v
     def get_hold(self,k): return self.s.holds.get(k)
@@ -84,7 +90,7 @@ class _Idempotency:
         self.s.idempotency[k]=(fingerprint,result)
 
 class InMemoryStorageUnitOfWork:
-    def __init__(self,state): self.state=state; self.objects=_Objects(state); self.versions=_Versions(state); self.uploads=_Uploads(state); self.policies=_Policies(state); self.idempotency=_Idempotency(state); self.outbox=state.outbox; self._committed=False
+    def __init__(self,state): self.state=state; self.objects=_Objects(state); self.versions=_Versions(state); self.scans=_Scans(state); self.uploads=_Uploads(state); self.policies=_Policies(state); self.idempotency=_Idempotency(state); self.outbox=state.outbox; self._committed=False
     def __enter__(self): self.state.lock.acquire(); self._snapshot=self.state.snapshot(); return self
     def commit(self): self._committed=True
     def __exit__(self,*args):

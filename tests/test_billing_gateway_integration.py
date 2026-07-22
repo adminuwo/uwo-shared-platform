@@ -7,7 +7,7 @@ from services.ai_gateway.authorization import EntitlementAuthorizer
 from services.ai_gateway.billing import BillingCompensationError, ConfigBillingAuthorizer
 from services.ai_gateway.config import GatewayConfig, Provider, TenantPolicy
 from services.ai_gateway.content_safety import ContentSafetyError, ConfigContentSafetyAuthorizer
-from services.ai_gateway.execution import SecureExecutionRequest, SecureExecutionService
+from services.ai_gateway.execution import InMemoryExecutionOutcomeStore, SecureExecutionRequest, SecureExecutionService
 from services.ai_gateway.providers import ProviderError, ProviderResponse, ProviderUsage
 from services.ai_gateway.resilience import ResiliencePolicy, ResilientProviderExecutor
 from services.ai_gateway.router import ModelRouter
@@ -39,6 +39,11 @@ class Adapter:
         return self.outcome
 
 
+class FailingEventRecorder:
+    def record(self, event):
+        raise RuntimeError("downstream event transport is unavailable")
+
+
 class StaleOnceBillingService:
     def __init__(self, wrapped):
         self.wrapped = wrapped
@@ -64,10 +69,10 @@ class BillingGatewayIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.fixture = make_billing_fixture(); provision(self.fixture); self.audit = CaptureAudit(); self.config = config()
 
-    def service(self, adapter, lifecycle=None, event_publisher=None):
+    def service(self, adapter, lifecycle=None, event_recorder=None, outcomes=None):
         lifecycle = lifecycle or ServiceGatewayBilling(self.fixture.service, EXECUTOR, 5_000)
         executor = ResilientProviderExecutor({adapter.provider_id: adapter}, ResiliencePolicy(max_attempts=1), sleep=lambda _: None)
-        return SecureExecutionService(ModelRouter(self.config), EntitlementAuthorizer(self.config), ConfigBillingAuthorizer(self.config), ConfigContentSafetyAuthorizer(self.config), executor, self.audit, lifecycle, event_publisher)
+        return SecureExecutionService(ModelRouter(self.config), EntitlementAuthorizer(self.config), ConfigBillingAuthorizer(self.config), ConfigContentSafetyAuthorizer(self.config), executor, self.audit, lifecycle, event_recorder, outcomes)
 
     def request(self, request_id="req-gateway", prompt="safe"):
         return SecureExecutionRequest(request_id, TENANT, Product.AISA, "uwo-general-v1", "in", prompt)
@@ -102,7 +107,7 @@ class BillingGatewayIntegrationTests(unittest.TestCase):
 
     def test_provider_failure_publishes_redacted_platform_event(self):
         fund(self.fixture); events=CollectingEventPublisher();adapter=Adapter(ProviderError("provider failed",code="provider_unavailable"))
-        with self.assertRaises(Exception):self.service(adapter,event_publisher=events).execute(IDENTITY,self.request("req-published-failure"))
+        with self.assertRaises(Exception):self.service(adapter,event_recorder=events).execute(IDENTITY,self.request("req-published-failure"))
         self.assertEqual(len(events.events),1);self.assertEqual(events.events[0].event_type,"provider.execution.failed");self.assertNotIn("prompt",events.events[0].attributes)
 
     def test_output_safety_denial_releases_without_charge(self):
@@ -124,6 +129,17 @@ class BillingGatewayIntegrationTests(unittest.TestCase):
         self.assertEqual(balance.available_microunits, 98_900)
         self.assertEqual(len(self.fixture.usage._items), 1)
         self.assertEqual(len(self.fixture.ledger._items), 4)
+
+    def test_event_delivery_failure_cannot_fail_capture_or_repeat_provider_after_restart(self):
+        fund(self.fixture);outcomes=InMemoryExecutionOutcomeStore();adapter=Adapter(ProviderResponse("provider-durable","safe","deployment-a",ProviderUsage(1_000,0,1_000)))
+        first=self.service(adapter,event_recorder=FailingEventRecorder(),outcomes=outcomes);result=first.execute(IDENTITY,self.request("req-durable-outcome"));self.assertEqual(result.provider_request_id,"provider-durable");self.assertEqual(adapter.calls,1);self.assertEqual(len(self.fixture.usage._items),1)
+        restarted=self.service(adapter,event_recorder=FailingEventRecorder(),outcomes=outcomes);self.assertEqual(restarted.execute(IDENTITY,self.request("req-durable-outcome")),result);self.assertEqual(adapter.calls,1);self.assertEqual(len(self.fixture.usage._items),1);self.assertEqual(self.fixture.service.read_balance(PLATFORM,TENANT,"after-durable").available_microunits,98_900)
+
+    def test_execution_outcome_replay_is_bound_to_verified_subject(self):
+        fund(self.fixture);adapter=Adapter(ProviderResponse("provider-subject","safe","deployment-a",ProviderUsage(1_000,0,1_000)));service=self.service(adapter);request=self.request("req-subject-bound");service.execute(IDENTITY,request)
+        other=VerifiedSubjectIdentity("different-gateway-user",TENANT,"2026-07-20T12:00:00+00:00")
+        with self.assertRaises(Exception) as denied:service.execute(other,request)
+        self.assertEqual(denied.exception.code,"idempotency_conflict");self.assertEqual(adapter.calls,1)
 
     def test_unrelated_ledger_grant_does_not_block_gateway_capture(self):
         fund(self.fixture)

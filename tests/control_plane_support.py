@@ -59,9 +59,10 @@ class ControlPlaneFixture:
     subjects: StaticSubjectDirectory
     failures: FailureInjector
     audit: CaptureAudit
+    outbox: object
 
 
-def make_fixture(event_publisher=None) -> ControlPlaneFixture:
+def make_fixture() -> ControlPlaneFixture:
     failures = FailureInjector()
     tenants = InMemoryTenantRepository(failures)
     memberships = InMemoryMembershipRepository()
@@ -84,9 +85,8 @@ def make_fixture(event_publisher=None) -> ControlPlaneFixture:
         authorizer,
         audit,
         clock=lambda: NOW,
-        event_publisher=event_publisher,
     )
-    return ControlPlaneFixture(service, tenants, memberships, roles, entitlements, policies, idempotency, subjects, failures, audit)
+    return ControlPlaneFixture(service, tenants, memberships, roles, entitlements, policies, idempotency, subjects, failures, audit, unit_of_work.outbox)
 
 
 def bootstrap_tenant_admin(fixture: ControlPlaneFixture, tenant_id: str, admin: VerifiedSubjectIdentity) -> None:

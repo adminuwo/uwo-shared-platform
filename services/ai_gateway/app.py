@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from packages.contracts import Product
+from services.data_service_common import EventRecorder
 
 from .audit import AuditSink, JsonAuditSink, audit_event
 from .auth import AuthenticationError, Authenticator, HmacBearerAuthenticator, VerifiedIdentity
@@ -20,7 +21,7 @@ from .authorization import AuthorizationError, EntitlementAuthorizer
 from .billing import BillingCompensationError, BillingError, ConfigBillingAuthorizer
 from .config import ConfigurationError, GatewayConfig, load_config
 from .content_safety import ConfigContentSafetyAuthorizer, ContentSafetyAuthorizer, ContentSafetyError
-from .execution import SecureExecutionRequest, SecureExecutionService
+from .execution import ExecutionOutcomeStore, SecureExecutionRequest, SecureExecutionService
 from .providers import AzureOpenAIAdapter, OpenAIAdapter, ProviderAdapter, ProviderError
 from .resilience import ProviderUnavailable, ResiliencePolicy, ResilientProviderExecutor
 from .router import ModelRouter, RouteRequest, RoutingError
@@ -163,7 +164,7 @@ def build_adapters(config: GatewayConfig, secrets: SecretManager) -> dict[str, P
     return adapters
 
 
-def build_dependencies(config: GatewayConfig, authenticator: Authenticator, adapters: dict[str, ProviderAdapter], content_safety: ContentSafetyAuthorizer, audit: AuditSink) -> GatewayDependencies:
+def build_dependencies(config: GatewayConfig, authenticator: Authenticator, adapters: dict[str, ProviderAdapter], content_safety: ContentSafetyAuthorizer, audit: AuditSink, event_recorder: EventRecorder | None = None, execution_outcomes: ExecutionOutcomeStore | None = None) -> GatewayDependencies:
     router = ModelRouter(config)
     execution = SecureExecutionService(
         router,
@@ -172,6 +173,8 @@ def build_dependencies(config: GatewayConfig, authenticator: Authenticator, adap
         content_safety,
         ResilientProviderExecutor(adapters, ResiliencePolicy()),
         audit,
+        event_recorder=event_recorder,
+        outcomes=execution_outcomes,
     )
     return GatewayDependencies(router, authenticator, execution, audit)
 
