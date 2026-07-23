@@ -119,12 +119,13 @@ class MalwareScanResult:
     product: Product
     region: str
     status: MalwareScanStatus
+    scanner_source_id: str
     scanned_at: str
     scanner_reference: str
     schema_version: str = SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        _base(self.schema_version, {"scan_result_id": self.scan_result_id, "object_version_id": self.object_version_id, "object_id": self.object_id, "scanner_reference": self.scanner_reference}, {"scanned_at": self.scanned_at})
+        _base(self.schema_version, {"scan_result_id": self.scan_result_id, "object_version_id": self.object_version_id, "object_id": self.object_id, "scanner_source_id": self.scanner_source_id, "scanner_reference": self.scanner_reference}, {"scanned_at": self.scanned_at})
         _context(self.tenant_id, self.product, self.region)
         if not isinstance(self.status, MalwareScanStatus):
             raise ValueError("status must be a MalwareScanStatus")

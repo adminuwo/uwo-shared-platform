@@ -56,3 +56,12 @@ class NotificationTests(unittest.TestCase):
         n=self.create();self.service._providers={}
         with self.assertRaises(InfrastructureUnavailable) as unavailable:self.service.dispatch(PLATFORM,"tenant-a",n.notification_id,"dispatch")
         self.assertEqual(unavailable.exception.code,"provider_not_configured");self.assertEqual(self.state.notifications[n.notification_id].status,NotificationStatus.DEAD_LETTERED);self.assertEqual(self.state.outbox.get(deterministic_id("outbox",n.notification_id)).status,OutboxStatus.DEAD_LETTERED)
+    def test_final_attempt_crash_is_reconciled_without_another_delivery(self):
+        self.service._max=2;self.provider._outcomes=[ProviderAcceptance(False,True,None,"temporary")]
+        n=self.create();self.service.dispatch(PLATFORM,"tenant-a",n.notification_id,"first");self.advance(30)
+        _,_,final_claim=self.service._claim("tenant-a",n.notification_id);self.assertEqual(final_claim.attempts,2)
+        self.advance(31);recovered=self.service.dispatch(PLATFORM,"tenant-a",n.notification_id,"recover")
+        self.assertEqual(recovered.status,NotificationStatus.DEAD_LETTERED);self.assertEqual(len(self.provider.calls),1)
+        attempts=self.state.attempts.values();self.assertEqual(sorted(x.attempt_number for x in attempts),[1,2]);self.assertEqual(len(self.state.dead_letters),1)
+        record=self.state.outbox.get(deterministic_id("outbox",n.notification_id));self.assertEqual(record.status,OutboxStatus.DEAD_LETTERED)
+        replay=self.service.dispatch(PLATFORM,"tenant-a",n.notification_id,"recover-again");self.assertEqual(replay.status,NotificationStatus.DEAD_LETTERED);self.assertEqual(len(self.provider.calls),1);self.assertEqual(len(self.state.attempts),2);self.assertEqual(len(self.state.dead_letters),1)

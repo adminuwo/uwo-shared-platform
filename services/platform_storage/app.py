@@ -18,7 +18,7 @@ def router(service):
         if method=="POST" and len(p)==4 and p[1]=="objects" and p[3]=="restore":_need(b,"tenant_id","expected_version");return service.restore(i,b["tenant_id"],p[2],b["expected_version"],rid),HTTPStatus.OK
         if method=="PUT" and len(p)==4 and p[1]=="objects" and p[3]=="retention":_need(b,"tenant_id","retain_until","expected_version");return service.apply_retention(i,b["tenant_id"],p[2],b["retain_until"],b["expected_version"],rid,override=b.get("override",False),reason_code=b.get("reason_code")),HTTPStatus.OK
         if method=="PUT" and len(p)==4 and p[1]=="objects" and p[3]=="legal-hold":_need(b,"tenant_id","active","reason_code","expected_version");return service.set_legal_hold(i,b["tenant_id"],p[2],b["active"],b["reason_code"],b["expected_version"],rid),HTTPStatus.OK
-        if method=="POST" and len(p)==4 and p[1]=="object-versions" and p[3]=="malware-scan":_need(b,"tenant_id","status");return service.record_malware_scan(i,b["tenant_id"],p[2],MalwareScanStatus(b["status"]),rid),HTTPStatus.OK
+        if method=="POST" and len(p)==4 and p[1]=="object-versions" and p[3]=="malware-scan":_need(b,"tenant_id","status");return service.record_malware_scan(i,b["tenant_id"],p[2],MalwareScanStatus(b["status"]),key or "",rid),HTTPStatus.OK
         if method=="POST" and len(p)==4 and p[1]=="objects" and p[3]=="download-authorizations":_need(b,"tenant_id");return service.authorize_download(i,b["tenant_id"],p[2],rid,b.get("ttl_seconds",300)),HTTPStatus.CREATED
         raise InvalidRequest("unknown_route","route not found")
     return route

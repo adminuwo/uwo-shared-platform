@@ -1,4 +1,5 @@
 import unittest
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from packages.contracts import *
@@ -39,3 +40,12 @@ class AuditTests(unittest.TestCase):
     def test_actor_provenance_cannot_be_spoofed(self):
         with self.assertRaises(AuthorizationDenied) as denied:self.service.append(PLATFORM,"tenant-a","action","succeeded","request",{},actor_subject="another-subject")
         self.assertEqual(denied.exception.code,"actor_provenance_mismatch")
+        direct=self.service.append(PLATFORM,"tenant-a","action","succeeded","request-verified",{"pseudonymous_subject_id":"pseudo-arbitrary"})
+        self.assertEqual(direct.actor_subject,PLATFORM.subject);self.assertEqual(direct.attributes["pseudonymous_subject_id"],"pseudo-arbitrary")
+        source=platform_event("storage.object.finalized","tenant-a","source-pseudo",{"resource_id":"object-pseudo","pseudonymous_subject_id":"pseudo-source"},NOW);recorded=self.service.append_source_event(PLATFORM,source)
+        self.assertEqual(recorded.actor_subject,PLATFORM.subject);self.assertEqual(recorded.attributes["pseudonymous_subject_id"],"pseudo-source")
+    def test_export_verification_rejects_cross_tenant_missing_sequence_and_broken_chain(self):
+        self.append(1);self.append(2);self.append(3);manifest,events=self.service.export(ADMIN_A,"tenant-a","export-hardening")
+        cross=(replace(events[0],tenant_id="tenant-b"),)+events[1:];cross_manifest=replace(manifest,integrity_hash=hashlib.sha256(contract_json(cross).encode()).hexdigest());self.assertFalse(self.service.verify_export(cross_manifest,cross))
+        missing=(events[0],events[2]);missing_manifest=replace(manifest,event_count=2,integrity_hash=hashlib.sha256(contract_json(missing).encode()).hexdigest());self.assertFalse(self.service.verify_export(missing_manifest,missing))
+        broken=(events[0],replace(events[1],previous_hash="0"*64),events[2]);broken_manifest=replace(manifest,integrity_hash=hashlib.sha256(contract_json(broken).encode()).hexdigest());self.assertFalse(self.service.verify_export(broken_manifest,broken))

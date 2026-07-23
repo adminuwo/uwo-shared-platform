@@ -88,6 +88,18 @@ class OutboxTests(unittest.TestCase):
         self.assertEqual(pending.status, OutboxStatus.PENDING)
         self.assertEqual(dead.status, OutboxStatus.DEAD_LETTERED)
 
+    def test_exhausted_expired_claim_requires_owner_reconciliation(self):
+        first = self.outbox.claim(self.record_id, "worker-a", NOW, 30)
+        self.outbox.retry(self.record_id, "worker-a", first.version, LATER)
+        final = self.outbox.claim(self.record_id, "worker-b", LATER, 30)
+        after_final_lease = "2026-07-20T12:01:02+00:00"
+        with self.assertRaises(Conflict) as denied:
+            self.outbox.claim(self.record_id, "worker-c", after_final_lease, 30)
+        self.assertEqual(denied.exception.code, "outbox_attempts_exhausted")
+        current = self.outbox.get(self.record_id)
+        self.assertEqual(current.status, OutboxStatus.CLAIMED)
+        self.assertEqual(current.version, final.version)
+
     def test_event_id_includes_safe_attribute_fingerprint(self):
         other = platform_event(
             self.event.event_type,

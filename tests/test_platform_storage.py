@@ -33,14 +33,14 @@ class StorageTests(unittest.TestCase):
         self.service.set_legal_hold(ADMIN_A,"tenant-a",r.object.object_id,True,"investigation",0,"hold")
         with self.assertRaises(PolicyViolation):self.service.mark_deleted(ADMIN_A,"tenant-a",r.object.object_id,1,"delete")
         with self.assertRaises(PolicyViolation):self.service.authorize_download(ADMIN_A,"tenant-a",r.object.object_id,"download")
-        self.service.record_malware_scan(PLATFORM,"tenant-a",r.object_version.object_version_id,MalwareScanStatus.INFECTED,"scan")
+        self.service.record_malware_scan(PLATFORM,"tenant-a",r.object_version.object_version_id,MalwareScanStatus.INFECTED,"source-infected","scan")
         with self.assertRaises(PolicyViolation):self.service.authorize_download(ADMIN_A,"tenant-a",r.object.object_id,"download")
     def test_clean_object_has_opaque_timed_download_authorization(self):
-        r=self.finalize(self.initiate());self.service.record_malware_scan(PLATFORM,"tenant-a",r.object_version.object_version_id,MalwareScanStatus.CLEAN,"scan");auth=self.service.authorize_download(ADMIN_A,"tenant-a",r.object.object_id,"download")
+        r=self.finalize(self.initiate());self.service.record_malware_scan(PLATFORM,"tenant-a",r.object_version.object_version_id,MalwareScanStatus.CLEAN,"source-clean","scan");auth=self.service.authorize_download(ADMIN_A,"tenant-a",r.object.object_id,"download")
         self.assertTrue(auth.opaque_token.startswith("opaque-"));self.assertNotIn(r.object_version.storage_key,auth.opaque_token)
     def test_deleted_object_and_missing_restricted_policy_fail_closed(self):
         with self.assertRaises(PolicyViolation):self.initiate("restricted-missing",ObjectClassification.RESTRICTED)
-        r=self.finalize(self.initiate("deletable"));self.service.record_malware_scan(PLATFORM,"tenant-a",r.object_version.object_version_id,MalwareScanStatus.CLEAN,"scan");self.service.mark_deleted(ADMIN_A,"tenant-a",r.object.object_id,1,"delete")
+        r=self.finalize(self.initiate("deletable"));self.service.record_malware_scan(PLATFORM,"tenant-a",r.object_version.object_version_id,MalwareScanStatus.CLEAN,"source-deletable","scan");self.service.mark_deleted(ADMIN_A,"tenant-a",r.object.object_id,1,"delete")
         with self.assertRaises(PolicyViolation):self.service.authorize_download(ADMIN_A,"tenant-a",r.object.object_id,"download")
     def test_transaction_failure_leaves_no_partial_state(self):
         self.state.fail_next="idempotency"
@@ -58,7 +58,7 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(changed.version,2);events=[event for event in self.ctx.audit.events if event.event_type=="storage.retention_overridden"];self.assertEqual(len(events),1);self.assertEqual(events[0].reason_code,"legal-approval")
     def test_malware_scan_history_does_not_mutate_object_version(self):
         result=self.finalize(self.initiate());original=self.state.versions[result.object_version.object_version_id]
-        first=self.service.record_malware_scan(PLATFORM,"tenant-a",original.object_version_id,MalwareScanStatus.INFECTED,"scan-1");self.advance(1);second=self.service.record_malware_scan(PLATFORM,"tenant-a",original.object_version_id,MalwareScanStatus.CLEAN,"scan-2")
+        first=self.service.record_malware_scan(PLATFORM,"tenant-a",original.object_version_id,MalwareScanStatus.INFECTED,"source-history-1","scan-1");self.advance(1);second=self.service.record_malware_scan(PLATFORM,"tenant-a",original.object_version_id,MalwareScanStatus.CLEAN,"source-history-2","scan-2")
         self.assertEqual(self.state.versions[original.object_version_id],original);self.assertNotEqual(first.scan_result_id,second.scan_result_id);self.assertEqual(len(self.state.scans),2);self.assertEqual(self.service.current_scan_status(ADMIN_A,"tenant-a",original.object_version_id),MalwareScanStatus.CLEAN)
     def test_deleted_object_cannot_receive_a_new_version(self):
         result=self.finalize(self.initiate());self.service.mark_deleted(ADMIN_A,"tenant-a",result.object.object_id,result.object.version,"delete")
@@ -67,6 +67,23 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(denied.exception.code,"object_deleted");self.assertEqual(len(self.state.versions),1)
     def test_utc_equivalent_retention_deadline_and_download_ttl_bounds(self):
         result=self.finalize(self.initiate());self.service.apply_retention(ADMIN_A,"tenant-a",result.object.object_id,"2026-07-20T12:00:00Z",0,"retention");deleted=self.service.mark_deleted(ADMIN_A,"tenant-a",result.object.object_id,result.object.version,"delete");self.assertEqual(deleted.status,ObjectStatus.DELETED)
-        clean=self.finalize(self.initiate("ttl-object"),"ttl-final");self.service.record_malware_scan(PLATFORM,"tenant-a",clean.object_version.object_version_id,MalwareScanStatus.CLEAN,"scan")
+        clean=self.finalize(self.initiate("ttl-object"),"ttl-final");self.service.record_malware_scan(PLATFORM,"tenant-a",clean.object_version.object_version_id,MalwareScanStatus.CLEAN,"source-ttl","scan")
         for ttl in (0,29,3601):
             with self.assertRaises(InvalidRequest):self.service.authorize_download(ADMIN_A,"tenant-a",clean.object.object_id,"download",ttl)
+    def test_malware_scan_exact_replay_has_one_history_entry_and_event(self):
+        result=self.finalize(self.initiate("scan-replay"));first=self.service.record_malware_scan(PLATFORM,"tenant-a",result.object_version.object_version_id,MalwareScanStatus.INFECTED,"scanner-job-1","scan-first");self.advance(10)
+        replay=self.service.record_malware_scan(PLATFORM,"tenant-a",result.object_version.object_version_id,MalwareScanStatus.INFECTED,"scanner-job-1","scan-retry")
+        self.assertEqual(replay,first);self.assertEqual(len(self.state.scans),1);self.assertEqual(len(self.state.outbox.pending()),3)
+        malware=[x for x in self.state.outbox.pending() if x.event.event_type=="storage.object.malware-detected"];self.assertEqual(len(malware),1)
+    def test_malware_scan_source_conflicts_fail_closed_across_object_tenant_and_status(self):
+        first=self.finalize(self.initiate("scan-conflict-1"));second=self.finalize(self.initiate("scan-conflict-2"),"scan-conflict-final-2")
+        self.service.record_malware_scan(PLATFORM,"tenant-a",first.object_version.object_version_id,MalwareScanStatus.CLEAN,"scanner-job-conflict","scan")
+        cases=(("tenant-a",second.object_version.object_version_id,MalwareScanStatus.CLEAN),("tenant-b",first.object_version.object_version_id,MalwareScanStatus.CLEAN),("tenant-a",first.object_version.object_version_id,MalwareScanStatus.INFECTED))
+        for tenant,version,status in cases:
+            with self.assertRaises(Exception) as denied:self.service.record_malware_scan(PLATFORM,tenant,version,status,"scanner-job-conflict","retry")
+            self.assertEqual(denied.exception.code,"idempotency_conflict")
+        self.assertEqual(len(self.state.scans),1)
+    def test_malware_scan_and_event_roll_back_atomically(self):
+        result=self.finalize(self.initiate("scan-rollback"));before_outbox=len(self.state.outbox.pending());self.state.fail_next="outbox"
+        with self.assertRaises(RepositoryIntegrityError):self.service.record_malware_scan(PLATFORM,"tenant-a",result.object_version.object_version_id,MalwareScanStatus.INFECTED,"scanner-job-rollback","scan")
+        self.assertFalse(self.state.scans);self.assertEqual(len(self.state.outbox.pending()),before_outbox);self.assertFalse(any(key[1]=="scanner-job-rollback" for key in self.state.idempotency))

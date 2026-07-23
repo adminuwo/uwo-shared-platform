@@ -137,14 +137,23 @@ class PlatformStorageService:
             if old and old.version!=expected_version: raise Conflict("stale_version","legal hold version is stale")
             if old is None and expected_version!=0: raise Conflict("stale_version","legal hold version is stale")
             result=tx.policies.put_hold(value); tx.commit(); return result
-    def record_malware_scan(self,identity,tenant_id,object_version_id,status,request_id):
+    def record_malware_scan(self,identity,tenant_id,object_version_id,status,scanner_source_id,request_id):
         self._auth.require_executor(identity,tenant_id,allow_suspended=True)
+        require_idempotency_key(scanner_source_id)
+        scope=("storage.scan.record","global","scanner-source")
+        fp=contract_fingerprint({"actor_subject":identity.subject,"tenant_id":tenant_id,"object_version_id":object_version_id,"status":status.value})
         with self._uow() as tx:
+            old=tx.idempotency.get(scope,scanner_source_id)
+            if old is not None:
+                result=self._replay(old,fp);tx.commit();return result
             value=tx.versions.get(object_version_id)
             if value is None or value.tenant_id!=tenant_id: raise ResourceNotFound("unknown_object_version","object version does not exist")
-            result=MalwareScanResult(deterministic_id("scan",object_version_id,request_id),object_version_id,value.object_id,tenant_id,value.product,value.region,status,self._clock(),deterministic_id("scanner",identity.subject))
+            result=MalwareScanResult(deterministic_id("scan",identity.subject,scanner_source_id),object_version_id,value.object_id,tenant_id,value.product,value.region,status,scanner_source_id,self._clock(),deterministic_id("scanner",identity.subject))
             tx.scans.append(result)
-            if status is MalwareScanStatus.INFECTED: tx.outbox.enqueue(OutboxRecord(deterministic_id("outbox","malware",object_version_id),platform_event("storage.object.malware-detected",tenant_id,request_id,{"resource_id":value.object_id,"region":value.region,"product":value.product.value}),OutboxStatus.PENDING,0,None,1))
+            tx.idempotency.put(scope,scanner_source_id,fp,result)
+            if status is MalwareScanStatus.INFECTED:
+                event=platform_event("storage.object.malware-detected",tenant_id,request_id,{"resource_id":value.object_id,"region":value.region,"product":value.product.value})
+                tx.outbox.enqueue(OutboxRecord(deterministic_id("outbox",result.scan_result_id),event,OutboxStatus.PENDING,0,None,1))
             tx.commit(); return result
     def current_scan_status(self,identity,tenant_id,object_version_id):
         value=self.get_version(identity,tenant_id,object_version_id)

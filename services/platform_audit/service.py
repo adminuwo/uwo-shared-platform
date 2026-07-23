@@ -45,15 +45,14 @@ class PlatformAuditService:
         if actor_subject is not None and actor_subject != identity.subject:
             raise AuthorizationDenied("actor_provenance_mismatch", "caller cannot assign another actor identity")
         with self._uow() as tx:
-            result = self._append_unchecked(tx, tenant_id, action, outcome, request_id, attributes, actor_subject, self._clock())
+            result = self._append_unchecked(tx, tenant_id, action, outcome, request_id, attributes, identity.subject, self._clock())
             tx.commit()
             return result
 
     def append_source_event(self, identity: VerifiedSubjectIdentity, event: PlatformEvent):
         self._auth.require_executor(identity, event.tenant_id, allow_suspended=True)
         fingerprint = contract_fingerprint(event)
-        attributes = {key: value for key, value in event.attributes.items() if key in AUDIT_SOURCE_KEYS and key != "pseudonymous_subject_id"}
-        pseudonymous_actor = event.attributes.get("pseudonymous_subject_id")
+        attributes = {key: value for key, value in event.attributes.items() if key in AUDIT_SOURCE_KEYS}
         with self._uow() as tx:
             existing = tx.source_events.get(event.event_id)
             if existing is not None:
@@ -61,7 +60,16 @@ class PlatformAuditService:
                     raise Conflict("source_event_conflict", "source event ID was reused with different content")
                 tx.commit()
                 return existing[1]
-            result = self._append_unchecked(tx, event.tenant_id, event.event_type, "recorded", event.request_id, attributes, pseudonymous_actor, event.occurred_at)
+            result = self._append_unchecked(
+                tx,
+                event.tenant_id,
+                event.event_type,
+                "recorded",
+                event.request_id,
+                attributes,
+                identity.subject,
+                event.occurred_at,
+            )
             tx.source_events.put(event.event_id, fingerprint, result)
             tx.commit()
             return result
@@ -164,8 +172,38 @@ class PlatformAuditService:
     def verify_export(manifest: AuditExportManifest, events: tuple[DurableAuditEvent, ...]) -> bool:
         if len(events) != manifest.event_count:
             return False
-        if events and (events[0].sequence != manifest.first_sequence or events[-1].sequence != manifest.last_sequence):
+        if not events:
+            return (
+                manifest.first_sequence == 0
+                and manifest.last_sequence == 0
+                and hashlib.sha256(contract_json(events).encode()).hexdigest() == manifest.integrity_hash
+            )
+        if (
+            events[0].sequence != manifest.first_sequence
+            or events[-1].sequence != manifest.last_sequence
+            or manifest.last_sequence - manifest.first_sequence + 1 != manifest.event_count
+        ):
             return False
+        previous = ZERO_HASH if manifest.first_sequence == 1 else events[0].previous_hash
+        expected_sequence = manifest.first_sequence
+        for event in events:
+            if event.tenant_id != manifest.tenant_id or event.sequence != expected_sequence:
+                return False
+            expected_hash = _event_hash(
+                event.tenant_id,
+                event.sequence,
+                event.action,
+                event.outcome,
+                event.occurred_at,
+                event.request_id,
+                event.actor_subject,
+                event.attributes,
+                previous,
+            )
+            if event.previous_hash != previous or event.current_hash != expected_hash:
+                return False
+            previous = event.current_hash
+            expected_sequence += 1
         return hashlib.sha256(contract_json(events).encode()).hexdigest() == manifest.integrity_hash
 
     def set_retention(self, identity, tenant_id, retain_until, legal_hold, expected_version, request_id):

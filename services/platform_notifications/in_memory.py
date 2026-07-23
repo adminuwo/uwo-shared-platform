@@ -68,7 +68,12 @@ class _Notifications:
     def get_by_dedup(self,tenant_id,key): return next((x for x in self.s.notifications.values() if x.tenant_id==tenant_id and x.deduplication_key==key),None)
 class _Attempts:
     def __init__(self,s): self.s=s
-    def append(self,v): self.s._fail("attempt"); self.s.attempts[v.attempt_id]=v; return v
+    def append(self,v):
+        self.s._fail("attempt"); old=self.s.attempts.get(v.attempt_id)
+        if old is not None:
+            if old!=v: raise Conflict("delivery_attempt_conflict","delivery attempt has conflicting content")
+            return old
+        self.s.attempts[v.attempt_id]=v; return v
     def list(self,k): return tuple(sorted((x for x in self.s.attempts.values() if x.notification_id==k),key=lambda x:x.attempt_number))
 class _Preferences:
     def __init__(self,s): self.s=s
@@ -79,7 +84,12 @@ class _Preferences:
     def get(self,t,s,c): return self.s.preferences.get((t,s,c))
 class _DeadLetters:
     def __init__(self,s): self.s=s
-    def create(self,v): self.s.dead_letters[v.dead_letter_id]=v; return v
+    def create(self,v):
+        old=self.s.dead_letters.get(v.dead_letter_id)
+        if old is not None:
+            if old!=v: raise Conflict("dead_letter_conflict","dead letter has conflicting content")
+            return old
+        self.s.dead_letters[v.dead_letter_id]=v; return v
     def get(self,k): return self.s.dead_letters.get(k)
 
 class InMemoryNotificationUnitOfWork:

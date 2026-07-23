@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Mapping
 
 from packages.contracts import (
@@ -178,6 +178,66 @@ class PlatformNotificationService:
     def retry_delay(self, attempt_number):
         return min(self._base * (2 ** max(0, attempt_number - 1)), 3600)
 
+    @staticmethod
+    def _expired(record, now: str) -> bool:
+        if record.status is not OutboxStatus.CLAIMED or record.lease_expires_at is None:
+            return False
+        lease = datetime.fromisoformat(record.lease_expires_at.replace("Z", "+00:00"))
+        instant = datetime.fromisoformat(now.replace("Z", "+00:00"))
+        if lease.utcoffset() != timezone.utc.utcoffset(lease) or instant.utcoffset() != timezone.utc.utcoffset(instant):
+            raise ValueError("notification lease timestamps must be UTC")
+        return lease <= instant
+
+    def _reconcile_exhausted(self, tx, notification, record, now: str):
+        """Atomically align notification, attempt, dead letter, and outbox."""
+        if record.attempts < record.max_attempts:
+            raise Conflict("outbox_attempts_available", "notification delivery attempts remain")
+        reason = "delivery_lease_exhausted"
+        attempt_id = deterministic_id("attempt", notification.notification_id, record.attempts)
+        existing_attempts = {item.attempt_id: item for item in tx.attempts.list(notification.notification_id)}
+        attempt = DeliveryAttempt(
+            attempt_id,
+            notification.notification_id,
+            notification.tenant_id,
+            record.attempts,
+            DeliveryOutcome.PERMANENT_FAILURE,
+            None,
+            reason,
+            now,
+            None,
+        )
+        existing_attempt = existing_attempts.get(attempt_id)
+        if existing_attempt is None:
+            tx.attempts.append(attempt)
+        elif existing_attempt != attempt:
+            raise Conflict("delivery_attempt_conflict", "final delivery attempt has conflicting content")
+        dead = DeadLetterRecord(
+            deterministic_id("dead", notification.notification_id),
+            notification.notification_id,
+            notification.tenant_id,
+            reason,
+            record.attempts,
+            now,
+        )
+        existing_dead = tx.dead_letters.get(dead.dead_letter_id)
+        if existing_dead is None:
+            tx.dead_letters.create(dead)
+        elif existing_dead != dead:
+            raise Conflict("dead_letter_conflict", "notification dead letter has conflicting content")
+        result = notification
+        if notification.status is not NotificationStatus.DEAD_LETTERED:
+            result = tx.notifications.update(
+                replace(
+                    notification,
+                    status=NotificationStatus.DEAD_LETTERED,
+                    updated_at=now,
+                    version=notification.version + 1,
+                ),
+                notification.version,
+            )
+        tx.outbox.reconcile_dead_letter(record.record_id, record.version, now)
+        return result
+
     def _claim(self, tenant_id: str, notification_id: str):
         now = self._clock()
         with self._uow() as tx:
@@ -187,12 +247,33 @@ class PlatformNotificationService:
             outbox_id = deterministic_id("outbox", notification_id)
             record = tx.outbox.get(outbox_id)
             if notification.status in TERMINAL:
-                if record is not None:
+                if notification.status is NotificationStatus.CANCELLED and record is not None:
                     tx.outbox.cancel(outbox_id)
+                elif notification.status is NotificationStatus.DELIVERED and (
+                    record is None or record.status is not OutboxStatus.ACCEPTED
+                ):
+                    raise Conflict("notification_outbox_inconsistent", "delivered notification requires an accepted outbox")
+                elif notification.status is NotificationStatus.DEAD_LETTERED and record is not None:
+                    if record.status is not OutboxStatus.DEAD_LETTERED:
+                        if record.attempts < record.max_attempts:
+                            raise Conflict("notification_outbox_inconsistent", "dead-lettered notification has active outbox work")
+                        self._reconcile_exhausted(tx, notification, record, now)
                 tx.commit()
                 return notification, None, None
             if record is None:
                 raise Conflict("notification_outbox_missing", "notification delivery record does not exist")
+            if record.status is OutboxStatus.DEAD_LETTERED:
+                result = self._reconcile_exhausted(tx, notification, record, now)
+                tx.commit()
+                return result, None, None
+            if record.status in {OutboxStatus.ACCEPTED, OutboxStatus.CANCELLED}:
+                raise Conflict("notification_outbox_inconsistent", "enqueued notification has a terminal outbox")
+            if record.attempts >= record.max_attempts and (
+                record.status is OutboxStatus.PENDING or self._expired(record, now)
+            ):
+                result = self._reconcile_exhausted(tx, notification, record, now)
+                tx.commit()
+                return result, None, None
             claimed = tx.outbox.claim(outbox_id, self._worker_id, now, self._lease_seconds)
             template = tx.templates.get_version(notification.template_id, notification.template_version)
             tx.commit()

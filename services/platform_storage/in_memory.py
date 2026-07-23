@@ -16,11 +16,15 @@ class FakeBlobStore:
     def stat(self, storage_key: str) -> BlobMetadata | None:
         with self._lock: return self._metadata.get(storage_key)
 
+class _StorageOutbox(InMemoryOutbox):
+    def __init__(self,state): super().__init__();self.state=state
+    def enqueue(self,record): self.state._fail("outbox");return super().enqueue(record)
+
 class InMemoryStorageRepository:
     def __init__(self) -> None:
         self.objects: dict[str, StoredObject] = {}; self.versions: dict[str, ObjectVersion] = {}; self.uploads: dict[str, UploadSession] = {}
         self.retentions: dict[str, RetentionPolicy] = {}; self.holds: dict[str, LegalHold] = {}; self.scans: dict[str, MalwareScanResult] = {}; self.idempotency: dict[tuple[tuple[str,str,str],str], tuple[str,Any]] = {}
-        self.outbox = InMemoryOutbox(); self.lock = RLock(); self.fail_next: str | None = None
+        self.lock = RLock(); self.fail_next: str | None = None; self.outbox = _StorageOutbox(self)
     def _fail(self, operation: str) -> None:
         if self.fail_next == operation: self.fail_next = None; raise RepositoryIntegrityError(f"injected {operation} failure")
     def snapshot(self): return (dict(self.objects),dict(self.versions),dict(self.uploads),dict(self.retentions),dict(self.holds),dict(self.scans),dict(self.idempotency),self.outbox.snapshot())
@@ -54,6 +58,7 @@ class _Versions:
 class _Scans:
     def __init__(self,s): self.s=s
     def append(self,v):
+        self.s._fail("scan")
         if v.scan_result_id in self.s.scans: raise Conflict("duplicate_scan_result","scan result already exists")
         self.s.scans[v.scan_result_id]=v; return v
     def list(self,k): return tuple(sorted((x for x in self.s.scans.values() if x.object_version_id==k),key=lambda x:(x.scanned_at,x.scan_result_id)))

@@ -296,9 +296,7 @@ class InMemoryOutbox:
             if current.status is OutboxStatus.PENDING and current.next_attempt_at is not None and _parse_utc(current.next_attempt_at, "next_attempt_at") > instant:
                 raise Conflict("retry_not_due", "outbox retry is not due")
             if current.attempts >= current.max_attempts:
-                dead = replace(current, status=OutboxStatus.DEAD_LETTERED, lease_owner=None, lease_expires_at=None, version=current.version + 1)
-                self._records[record_id] = dead
-                raise Conflict("outbox_dead_lettered", "outbox maximum attempts were exhausted")
+                raise Conflict("outbox_attempts_exhausted", "outbox owner must reconcile exhausted work")
             claimed = replace(
                 current,
                 status=OutboxStatus.CLAIMED,
@@ -372,6 +370,39 @@ class InMemoryOutbox:
             if lease_owner is not None:
                 self._require_claim(current, lease_owner, expected_version, now)
             updated = replace(current, status=status, next_attempt_at=next_attempt_at, lease_owner=None, lease_expires_at=None, version=current.version + 1)
+            self._records[record_id] = updated
+            return updated
+
+    def reconcile_dead_letter(self, record_id: str, expected_version: int, now: str) -> OutboxRecord:
+        """Let an owning service atomically reconcile exhausted business work."""
+        instant = _parse_utc(now, "now")
+        with self._lock:
+            current = self._records.get(record_id)
+            if current is None:
+                raise ResourceNotFound("unknown_outbox_record", "outbox record does not exist")
+            if current.status is OutboxStatus.DEAD_LETTERED:
+                return current
+            if current.status in TERMINAL_OUTBOX_STATUSES:
+                raise Conflict("outbox_terminal", "outbox record is terminal")
+            if current.version != expected_version:
+                raise Conflict("stale_version", "outbox version is stale")
+            if current.attempts < current.max_attempts:
+                raise Conflict("outbox_attempts_available", "outbox attempts are not exhausted")
+            if current.status is OutboxStatus.CLAIMED:
+                expires = _parse_utc(current.lease_expires_at or "", "lease_expires_at")
+                if expires > instant:
+                    raise Conflict("outbox_already_claimed", "outbox record has an active lease")
+            if current.status is OutboxStatus.PENDING and current.next_attempt_at is not None:
+                if _parse_utc(current.next_attempt_at, "next_attempt_at") > instant:
+                    raise Conflict("retry_not_due", "outbox retry is not due")
+            updated = replace(
+                current,
+                status=OutboxStatus.DEAD_LETTERED,
+                next_attempt_at=None,
+                lease_owner=None,
+                lease_expires_at=None,
+                version=current.version + 1,
+            )
             self._records[record_id] = updated
             return updated
 
