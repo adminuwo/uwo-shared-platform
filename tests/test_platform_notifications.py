@@ -59,9 +59,17 @@ class NotificationTests(unittest.TestCase):
     def test_final_attempt_crash_is_reconciled_without_another_delivery(self):
         self.service._max=2;self.provider._outcomes=[ProviderAcceptance(False,True,None,"temporary")]
         n=self.create();self.service.dispatch(PLATFORM,"tenant-a",n.notification_id,"first");self.advance(30)
-        _,_,final_claim=self.service._claim("tenant-a",n.notification_id);self.assertEqual(final_claim.attempts,2)
+        provider_calls_before_claim=len(self.provider.calls)
+        _,_,final_claim=self.service._claim("tenant-a",n.notification_id);self.assertEqual(final_claim.attempts,2);self.assertEqual(len(self.provider.calls),provider_calls_before_claim)
+        claimed_record=self.state.outbox.get(deterministic_id("outbox",n.notification_id));self.assertEqual(claimed_record.status,OutboxStatus.CLAIMED);self.assertEqual(self.state.notifications[n.notification_id].status,NotificationStatus.ENQUEUED)
         self.advance(31);recovered=self.service.dispatch(PLATFORM,"tenant-a",n.notification_id,"recover")
         self.assertEqual(recovered.status,NotificationStatus.DEAD_LETTERED);self.assertEqual(len(self.provider.calls),1)
-        attempts=self.state.attempts.values();self.assertEqual(sorted(x.attempt_number for x in attempts),[1,2]);self.assertEqual(len(self.state.dead_letters),1)
+        attempts=self.state.attempts.values();self.assertEqual(sorted(x.attempt_number for x in attempts),[1,2])
+        final_attempts=[x for x in attempts if x.attempt_number==2];self.assertEqual(len(final_attempts),1);self.assertEqual(final_attempts[0].reason_code,"delivery_attempts_exhausted");self.assertEqual(final_attempts[0].outcome,DeliveryOutcome.PERMANENT_FAILURE)
+        dead_letters=list(self.state.dead_letters.values());self.assertEqual(len(dead_letters),1);self.assertEqual(dead_letters[0].reason_code,"delivery_attempts_exhausted")
         record=self.state.outbox.get(deterministic_id("outbox",n.notification_id));self.assertEqual(record.status,OutboxStatus.DEAD_LETTERED)
         replay=self.service.dispatch(PLATFORM,"tenant-a",n.notification_id,"recover-again");self.assertEqual(replay.status,NotificationStatus.DEAD_LETTERED);self.assertEqual(len(self.provider.calls),1);self.assertEqual(len(self.state.attempts),2);self.assertEqual(len(self.state.dead_letters),1)
+    def test_non_exhaustion_claim_conflict_is_not_reconciled(self):
+        n=self.create();self.service._claim("tenant-a",n.notification_id)
+        with self.assertRaises(Conflict) as denied:self.service.dispatch(PLATFORM,"tenant-a",n.notification_id,"active-lease")
+        self.assertEqual(denied.exception.code,"outbox_already_claimed");self.assertEqual(self.state.notifications[n.notification_id].status,NotificationStatus.ENQUEUED);self.assertFalse(self.state.attempts);self.assertFalse(self.state.dead_letters);self.assertFalse(self.provider.calls)

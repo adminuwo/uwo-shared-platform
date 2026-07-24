@@ -188,11 +188,26 @@ class PlatformNotificationService:
             raise ValueError("notification lease timestamps must be UTC")
         return lease <= instant
 
-    def _reconcile_exhausted(self, tx, notification, record, now: str):
-        """Atomically align notification, attempt, dead letter, and outbox."""
+    def _reconcile_exhausted(self, tx, tenant_id: str, notification_id: str, now: str):
+        """Atomically reconcile an expired final claim with its notification."""
+        notification = tx.notifications.get(notification_id)
+        if notification is None or notification.tenant_id != tenant_id:
+            raise ResourceNotFound("unknown_notification", "notification does not exist")
+        record = tx.outbox.get(deterministic_id("outbox", notification_id))
+        if record is None:
+            raise Conflict("notification_outbox_missing", "notification delivery record does not exist")
+        if notification.status is not NotificationStatus.ENQUEUED:
+            raise Conflict("notification_outbox_inconsistent", "exhausted delivery requires an enqueued notification")
+        if record.status is not OutboxStatus.CLAIMED:
+            raise Conflict("notification_outbox_inconsistent", "exhausted delivery requires a final claimed outbox")
         if record.attempts < record.max_attempts:
             raise Conflict("outbox_attempts_available", "notification delivery attempts remain")
-        reason = "delivery_lease_exhausted"
+        if not self._expired(record, now):
+            raise Conflict("outbox_already_claimed", "final notification delivery lease has not expired")
+        reason = "delivery_attempts_exhausted"
+        reconciled_at = record.lease_expires_at
+        if reconciled_at is None:  # The claimed-status check above makes this defensive only.
+            raise Conflict("notification_outbox_inconsistent", "claimed notification outbox has no lease")
         attempt_id = deterministic_id("attempt", notification.notification_id, record.attempts)
         existing_attempts = {item.attempt_id: item for item in tx.attempts.list(notification.notification_id)}
         attempt = DeliveryAttempt(
@@ -203,7 +218,7 @@ class PlatformNotificationService:
             DeliveryOutcome.PERMANENT_FAILURE,
             None,
             reason,
-            now,
+            reconciled_at,
             None,
         )
         existing_attempt = existing_attempts.get(attempt_id)
@@ -217,7 +232,7 @@ class PlatformNotificationService:
             notification.tenant_id,
             reason,
             record.attempts,
-            now,
+            reconciled_at,
         )
         existing_dead = tx.dead_letters.get(dead.dead_letter_id)
         if existing_dead is None:
@@ -230,7 +245,7 @@ class PlatformNotificationService:
                 replace(
                     notification,
                     status=NotificationStatus.DEAD_LETTERED,
-                    updated_at=now,
+                    updated_at=reconciled_at,
                     version=notification.version + 1,
                 ),
                 notification.version,
@@ -253,28 +268,26 @@ class PlatformNotificationService:
                     record is None or record.status is not OutboxStatus.ACCEPTED
                 ):
                     raise Conflict("notification_outbox_inconsistent", "delivered notification requires an accepted outbox")
-                elif notification.status is NotificationStatus.DEAD_LETTERED and record is not None:
-                    if record.status is not OutboxStatus.DEAD_LETTERED:
-                        if record.attempts < record.max_attempts:
-                            raise Conflict("notification_outbox_inconsistent", "dead-lettered notification has active outbox work")
-                        self._reconcile_exhausted(tx, notification, record, now)
+                elif notification.status is NotificationStatus.DEAD_LETTERED and (
+                    record is None or record.status is not OutboxStatus.DEAD_LETTERED
+                ):
+                    raise Conflict("notification_outbox_inconsistent", "dead-lettered notification requires a dead-lettered outbox")
                 tx.commit()
                 return notification, None, None
             if record is None:
                 raise Conflict("notification_outbox_missing", "notification delivery record does not exist")
             if record.status is OutboxStatus.DEAD_LETTERED:
-                result = self._reconcile_exhausted(tx, notification, record, now)
-                tx.commit()
-                return result, None, None
+                raise Conflict("notification_outbox_inconsistent", "enqueued notification has a terminal outbox")
             if record.status in {OutboxStatus.ACCEPTED, OutboxStatus.CANCELLED}:
                 raise Conflict("notification_outbox_inconsistent", "enqueued notification has a terminal outbox")
-            if record.attempts >= record.max_attempts and (
-                record.status is OutboxStatus.PENDING or self._expired(record, now)
-            ):
-                result = self._reconcile_exhausted(tx, notification, record, now)
+            try:
+                claimed = tx.outbox.claim(outbox_id, self._worker_id, now, self._lease_seconds)
+            except Conflict as exc:
+                if exc.code != "outbox_attempts_exhausted":
+                    raise
+                result = self._reconcile_exhausted(tx, tenant_id, notification_id, now)
                 tx.commit()
                 return result, None, None
-            claimed = tx.outbox.claim(outbox_id, self._worker_id, now, self._lease_seconds)
             template = tx.templates.get_version(notification.template_id, notification.template_version)
             tx.commit()
             return notification, template, claimed
