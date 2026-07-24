@@ -36,6 +36,15 @@ from .billing import (
     UsageDimensions,
     UsageEvent,
 )
+from .data_services import (
+    AggregationWindow, AnalyticsDimensions, AnalyticsEvent, AnalyticsEventType, AnalyticsSnapshot,
+    AuditCheckpoint, AuditExportManifest, AuditIntegrityProof, AuditRetentionPolicy, AuditSequence,
+    ContentIntegrityMetadata, DeadLetterRecord, DeliveryAttempt, DeliveryOutcome, DownloadAuthorization,
+    DurableAuditEvent, LegalHold, MalwareScanResult, MalwareScanStatus, MetricDefinition, MetricPoint, Notification,
+    NotificationChannel, NotificationPreference, NotificationStatus, NotificationTemplate,
+    ObjectClassification, ObjectStatus, ObjectVersion, RetentionPolicy, StoredObject, TemplateVersion,
+    UploadSession, UploadStatus, contract_fingerprint, contract_json, contract_primitive,
+)
 
 __all__ = [
     "CAPABILITIES",
@@ -73,4 +82,11 @@ __all__ = [
     "TOKEN_RATE_UNIT",
     "UsageDimensions",
     "UsageEvent",
+    "AggregationWindow", "AnalyticsDimensions", "AnalyticsEvent", "AnalyticsEventType", "AnalyticsSnapshot",
+    "AuditCheckpoint", "AuditExportManifest", "AuditIntegrityProof", "AuditRetentionPolicy", "AuditSequence",
+    "ContentIntegrityMetadata", "DeadLetterRecord", "DeliveryAttempt", "DeliveryOutcome", "DownloadAuthorization",
+    "DurableAuditEvent", "LegalHold", "MalwareScanResult", "MalwareScanStatus", "MetricDefinition", "MetricPoint", "Notification",
+    "NotificationChannel", "NotificationPreference", "NotificationStatus", "NotificationTemplate",
+    "ObjectClassification", "ObjectStatus", "ObjectVersion", "RetentionPolicy", "StoredObject", "TemplateVersion",
+    "UploadSession", "UploadStatus", "contract_fingerprint", "contract_json", "contract_primitive",
 ]

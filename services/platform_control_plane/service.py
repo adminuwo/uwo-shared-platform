@@ -39,6 +39,7 @@ from .repositories import (
     TenantRepository,
     UnitOfWorkFactory,
 )
+from services.data_service_common import OutboxRecord, OutboxStatus, deterministic_id, platform_event
 
 TENANT_ADMIN_ROLE = "tenant-admin"
 TENANT_READER_ROLE = "tenant-reader"
@@ -183,8 +184,16 @@ class PlatformControlPlane:
             self._require(identity, tenant_id, Permission.TENANT_MANAGE)
         if current.status is status:
             raise Conflict("status_unchanged", "tenant already has the requested status")
-        updated = replace(current, status=status, updated_at=self._clock(), version=current.version + 1)
-        result = self._tenants.update(updated, expected_version)
+        timestamp = self._clock()
+        event = platform_event("tenant.status-changed", tenant_id, request_id, {"status": status.value, "region": current.region}, timestamp)
+        with self._unit_of_work() as transaction:
+            transactional_current = transaction.tenants.get(tenant_id)
+            if transactional_current is None:
+                raise ResourceNotFound("unknown_tenant", "tenant does not exist")
+            updated = replace(transactional_current, status=status, updated_at=timestamp, version=transactional_current.version + 1)
+            result = transaction.tenants.update(updated, expected_version)
+            transaction.outbox.enqueue(OutboxRecord(deterministic_id("outbox", event.event_id), event, OutboxStatus.PENDING, 0, None, 1))
+            transaction.commit()
         self._audit.emit(audit_event("tenant.status_changed", request_id, "succeeded", actor_subject=identity.subject, tenant_id=tenant_id, resource_id=status.value))
         return result
 

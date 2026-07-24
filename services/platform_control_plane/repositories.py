@@ -106,6 +106,7 @@ class ControlPlaneUnitOfWork(Protocol):
     entitlements: EntitlementRepository
     policies: PolicyVersionRepository
     idempotency: IdempotencyRepository
+    outbox: object
 
     def __enter__(self) -> "ControlPlaneUnitOfWork": ...
     def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None: ...

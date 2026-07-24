@@ -59,6 +59,7 @@ class ControlPlaneFixture:
     subjects: StaticSubjectDirectory
     failures: FailureInjector
     audit: CaptureAudit
+    outbox: object
 
 
 def make_fixture() -> ControlPlaneFixture:
@@ -85,7 +86,7 @@ def make_fixture() -> ControlPlaneFixture:
         audit,
         clock=lambda: NOW,
     )
-    return ControlPlaneFixture(service, tenants, memberships, roles, entitlements, policies, idempotency, subjects, failures, audit)
+    return ControlPlaneFixture(service, tenants, memberships, roles, entitlements, policies, idempotency, subjects, failures, audit, unit_of_work.outbox)
 
 
 def bootstrap_tenant_admin(fixture: ControlPlaneFixture, tenant_id: str, admin: VerifiedSubjectIdentity) -> None:

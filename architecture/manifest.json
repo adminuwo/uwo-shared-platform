@@ -8,21 +8,21 @@
       "id": "ai-gateway",
       "type": "service",
       "path": "services/ai_gateway",
-      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "billing-and-credits", "ai-gateway-and-model-router", "audit", "security", "connectors"],
+      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "billing-and-credits", "ai-gateway-and-model-router", "notifications", "analytics", "audit", "security", "connectors"],
       "endpoints": ["GET /healthz", "POST /v1/route", "POST /v1/execute"]
     },
     {
       "id": "shared-contracts",
       "type": "package",
       "path": "packages/contracts",
-      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "billing-and-credits", "ai-gateway-and-model-router"],
+      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "billing-and-credits", "ai-gateway-and-model-router", "storage", "notifications", "analytics", "audit"],
       "endpoints": []
     },
     {
       "id": "platform-control-plane",
       "type": "service",
       "path": "services/platform_control_plane",
-      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "audit", "security"],
+      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "notifications", "analytics", "audit", "security"],
       "endpoints": [
         "GET /healthz",
         "GET /v1/tenants",
@@ -45,7 +45,7 @@
       "id": "platform-billing",
       "type": "service",
       "path": "services/platform_billing",
-      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "billing-and-credits", "audit", "security"],
+      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "billing-and-credits", "notifications", "analytics", "audit", "security"],
       "endpoints": [
         "GET /healthz",
         "POST /v1/billing/accounts",
@@ -61,6 +61,81 @@
         "GET /v1/billing/accounts/{tenant_id}/usage/{usage_event_id}",
         "GET /v1/billing/accounts/{tenant_id}/ledger",
         "GET /v1/billing/accounts/{tenant_id}/rate-card"
+      ]
+    },
+    {
+      "id": "platform-storage",
+      "type": "service",
+      "path": "services/platform_storage",
+      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "storage", "notifications", "analytics", "audit", "security"],
+      "endpoints": [
+        "GET /healthz",
+        "GET /v1/health",
+        "POST /v1/uploads",
+        "POST /v1/uploads/{upload_id}/finalize",
+        "POST /v1/uploads/{upload_id}/abort",
+        "GET /v1/objects",
+        "GET /v1/objects/{object_id}",
+        "GET /v1/object-versions/{object_version_id}",
+        "DELETE /v1/objects/{object_id}",
+        "POST /v1/objects/{object_id}/restore",
+        "PUT /v1/objects/{object_id}/retention",
+        "PUT /v1/objects/{object_id}/legal-hold",
+        "POST /v1/object-versions/{object_version_id}/malware-scan",
+        "POST /v1/objects/{object_id}/download-authorizations"
+      ]
+    },
+    {
+      "id": "platform-notifications",
+      "type": "service",
+      "path": "services/platform_notifications",
+      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "notifications", "analytics", "audit", "security"],
+      "endpoints": [
+        "GET /healthz",
+        "GET /v1/health",
+        "POST /v1/templates",
+        "POST /v1/templates/{template_id}/versions",
+        "POST /v1/templates/{template_id}/activate",
+        "POST /v1/notifications",
+        "GET /v1/notifications",
+        "GET /v1/notifications/{notification_id}",
+        "POST /v1/notifications/{notification_id}/dispatch",
+        "POST /v1/notifications/{notification_id}/cancel",
+        "GET /v1/preferences",
+        "PUT /v1/preferences",
+        "GET /v1/dead-letters/{dead_letter_id}"
+      ]
+    },
+    {
+      "id": "platform-analytics",
+      "type": "service",
+      "path": "services/platform_analytics",
+      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "analytics", "audit", "security"],
+      "endpoints": [
+        "GET /healthz",
+        "GET /v1/health",
+        "POST /v1/events",
+        "GET /v1/events/{event_id}",
+        "POST /v1/snapshots",
+        "POST /v1/metrics",
+        "GET /v1/snapshots/{snapshot_id}/export"
+      ]
+    },
+    {
+      "id": "platform-audit",
+      "type": "service",
+      "path": "services/platform_audit",
+      "capabilities": ["identity", "organisation-and-tenant", "roles-and-entitlements", "audit", "security"],
+      "endpoints": [
+        "GET /healthz",
+        "GET /v1/health",
+        "POST /v1/events",
+        "GET /v1/events",
+        "POST /v1/verify",
+        "POST /v1/checkpoints",
+        "POST /v1/checkpoints/{checkpoint_id}/verify",
+        "POST /v1/exports",
+        "PUT /v1/retention"
       ]
     }
   ]

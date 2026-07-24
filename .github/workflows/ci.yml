@@ -30,3 +30,5 @@ jobs:
         run: python -m compileall -q packages services tooling tests
       - name: Run tests
         run: python -m unittest discover -s tests -v
+      - name: Reject whitespace errors
+        run: git diff --check

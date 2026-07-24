@@ -25,14 +25,17 @@ Exit: controlled internal workloads can execute models with end-to-end auditabil
 
 - Phase 3A foundation: versioned identity/tenancy contracts; isolated administration; rollback-safe UnitOfWork repositories; immutable-result idempotency ledger; subject-directory revalidation; canonical immutable policies; optimistic concurrency; and redacted audit/error boundaries
 - Phase 3B foundation: schema-versioned billing and mandatory provider-usage contracts; integer credit microunits; canonical append-only ledger semantics; version-free gateway receipts with transaction-local lifecycle state; as-of immutable example rate cards; transactional and idempotent financial mutations; tenant-isolated billing APIs; redacted authorization failure ownership; and retry-safe AI Gateway capture/compensation integration
+- Phase 3C foundation: metadata-only storage with immutable versions, idempotent transactional scan ingestion, and governed retention overrides; owner-reconciled claim/lease notification and shared event outboxes with stable downstream idempotency; privacy-safe analytics with server-owned recording time, half-open windows, and thresholded cross-tenant aggregates; verified-executor audit provenance, full-genesis checkpoints, chain-validating export manifests, and idempotent source ingestion; plus transactional restart-safe provider outcomes and mandatory execution events
 - Durable identity directory and control-plane repositories, policy promotion, and workload-identity integration
-- Durable billing and identity repositories, reservation expiry/reconciliation workers, rate-card approval, storage, notification, analytics, and durable audit services
+- Durable billing, identity, storage, notification, analytics, audit, and transactional-outbox backends; reservation expiry/reconciliation workers; and rate-card approval
 - Tenant administration API and policy promotion workflow
 - OpenTelemetry traces, metrics, SLOs, alerting, and operational runbooks
 
 Exit: all named UWO products can integrate through versioned contracts and platform SLOs.
 
 Phase 3B exit: all local validation passes without credentials or live providers; insufficient balances deny execution, successful safe usage captures once, missing usage fails closed, unrelated ledger activity cannot stale gateway capture/release, failures compensate idempotently, and retries cannot repeat provider execution or duplicate charges. Production billing remains blocked on durable transactional storage and workflow recovery, workload identity, reconciliation, approved pricing governance, immutable audit ingestion, and operational controls.
+
+Phase 3C exit: all local validation passes without cloud storage, messaging vendors, brokers, or production databases; scanner retries cannot duplicate history/events; final notification-lease crashes reconcile without redelivery or split terminal state; analytics exports contain only sufficiently aggregated allowlisted points; audit exports reject cross-tenant, missing-sequence, broken-chain, and digest substitution; verified executor provenance cannot be spoofed by pseudonymous identifiers; and gateway capture/event recovery survives process recreation without another provider call, charge, usage event, or platform event. Production remains blocked on regional durable repositories/outcomes/outboxes and blob stores, workload identity, encryption/key management, approved retention/legal-hold enforcement, real provider adapters, dispatcher/reconciliation workers, and Phase 3D observability/runbooks.
 
 ## Phase 4 — Regional production readiness
 

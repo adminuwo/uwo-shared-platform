@@ -7,6 +7,7 @@ from threading import RLock
 from typing import Any
 
 from packages.contracts import ModelEntitlement, PolicyDocument, Product, ProductEntitlement, Role, Tenant, TenantMembership
+from services.data_service_common import InMemoryOutbox
 
 from .errors import Conflict, RepositoryIntegrityError, ResourceNotFound, StaleVersion
 from .repositories import EntitlementSnapshot, IdempotencyRecord, IdempotencyScope, Page
@@ -301,6 +302,7 @@ class InMemoryUnitOfWork:
         entitlements: InMemoryEntitlementRepository,
         policies: InMemoryPolicyVersionRepository,
         idempotency: InMemoryIdempotencyRepository,
+        outbox: InMemoryOutbox,
         transaction_lock: RLock,
     ) -> None:
         self.tenants = tenants
@@ -309,8 +311,9 @@ class InMemoryUnitOfWork:
         self.entitlements = entitlements
         self.policies = policies
         self.idempotency = idempotency
+        self.outbox = outbox
         self._transaction_lock = transaction_lock
-        self._repository_locks = (tenants._lock, memberships._lock, entitlements._lock, policies._lock, idempotency._lock)
+        self._repository_locks = (tenants._lock, memberships._lock, entitlements._lock, policies._lock, idempotency._lock, outbox._lock)
         self._snapshots: tuple[Any, ...] | None = None
         self._committed = False
 
@@ -324,6 +327,7 @@ class InMemoryUnitOfWork:
             self.entitlements._snapshot(),
             self.policies._snapshot(),
             self.idempotency._snapshot(),
+            self.outbox.snapshot(),
         )
         return self
 
@@ -333,12 +337,13 @@ class InMemoryUnitOfWork:
     def rollback(self) -> None:
         if self._snapshots is None:
             return
-        tenants, memberships, entitlements, policies, idempotency = self._snapshots
+        tenants, memberships, entitlements, policies, idempotency, outbox = self._snapshots
         self.tenants._restore(tenants)
         self.memberships._restore(memberships)
         self.entitlements._restore(entitlements)
         self.policies._restore(policies)
         self.idempotency._restore(idempotency)
+        self.outbox.restore(outbox)
         self._snapshots = None
 
     def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
@@ -360,8 +365,10 @@ class InMemoryUnitOfWorkFactory:
         entitlements: InMemoryEntitlementRepository,
         policies: InMemoryPolicyVersionRepository,
         idempotency: InMemoryIdempotencyRepository,
+        outbox: InMemoryOutbox | None = None,
     ) -> None:
-        self._repositories = (tenants, memberships, roles, entitlements, policies, idempotency)
+        self.outbox = outbox or InMemoryOutbox()
+        self._repositories = (tenants, memberships, roles, entitlements, policies, idempotency, self.outbox)
         self._transaction_lock = RLock()
 
     def __call__(self) -> InMemoryUnitOfWork:
