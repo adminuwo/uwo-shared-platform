@@ -109,6 +109,29 @@ def validate(root: Path = ROOT) -> list[str]:
             errors.append("durable audit attribute allowlist contains sensitive fields")
         if EVENT_ATTRIBUTE_ALLOWLIST & forbidden_audit_fields:
             errors.append("platform event attribute allowlist contains sensitive fields")
+    phase3d_services = ("platform_tenant_admin", "platform_governance", "platform_operations")
+    for service_name in phase3d_services:
+        service_path = root / "services" / service_name
+        if not service_path.is_dir():
+            errors.append(f"missing Phase 3D service: {service_name}")
+            continue
+        app_source = (service_path / "app.py").read_text(encoding="utf-8")
+        if "from .in_memory" in app_source or "InMemory" in app_source:
+            errors.append(f"{service_name} HTTP startup must not instantiate test-only repositories")
+        if "requires injected" not in app_source:
+            errors.append(f"{service_name} executable startup must fail until production dependencies are injected")
+    operations_contracts = root / "packages/contracts/operations.py"
+    if not operations_contracts.is_file():
+        errors.append("missing Phase 3D governance and operations contracts")
+    else:
+        source = operations_contracts.read_text(encoding="utf-8")
+        forbidden_fields = {
+            "prompt", "model_output", "notification_body", "uploaded_content", "bearer_token",
+            "api_key", "provider_secret", "payment_credential", "stack_trace", "executable_payload",
+            "shell_command", "sql_statement", "cloud_command",
+        }
+        if any(f"    {name}:" in source for name in forbidden_fields):
+            errors.append("Phase 3D contracts contain a forbidden sensitive or executable field")
     return errors
 
 

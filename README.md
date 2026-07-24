@@ -67,6 +67,18 @@ Phase 3C adds four separate internal services. `platform_storage` owns metadata-
 
 All Phase 3C mutations keep business state and an outbox record in one rollback boundary where downstream delivery applies; control-plane status changes and AI Gateway mandatory outcome events use the same atomic pattern. Outbox records are immutable and optimistic-versioned. Dispatchers claim leases, exclude concurrent processing, obey due times, recover expired leases, acknowledge only after idempotent downstream acceptance, and ask the owning business service to reconcile exhausted work. `PlatformEvent` validates stable IDs, UTC/schema version, deeply immutable allowlisted scalar attributes, and an event ID fingerprint covering type, tenant, request, and safe attributes. Delivery infrastructure failure never changes an already committed business result. Committed repositories, blob storage, providers, subject directories, outcome stores, and publishers are thread-safe test integrations only. Every executable entry point refuses to choose them for production.
 
+## Platform Operations and Governance
+
+Phase 3D adds three separate internal boundaries. `platform_tenant_admin` coordinates onboarding, suspension, reactivation, decommission planning, and operational-profile reads through injected provider-neutral clients. It never reads another service’s repositories. Every workflow has deterministic steps, stable per-step idempotency keys, optimistic versions, exclusive expiring claims, immutable receipts, restart-safe continuation, explicit blocked/failed states, and transactional workflow events. Decommissioning is planning-only and cannot delete storage, billing, analytics, audit, notification, retention, or legal-hold evidence.
+
+`platform_governance` owns policy drafts, validation, change requests, distinct approvals, immutable SHA-256 releases, environment promotion, history, comparison, and rollback-as-a-new-release. Policy content is deeply immutable canonical JSON and rejects secrets, credentials, endpoints, and executable fields at any nesting depth. Production promotion requires platform authority and two distinct verified approvers; self-approval and deprovisioned approval fail closed. Active releases are never edited, stale base releases and concurrent environment versions are rejected, and exact promotion retries replay one result and one outbox record.
+
+`platform_operations` accepts only allowlisted scalar operational telemetry from registered service identities and explicitly authorized executors. Samples are deterministic and idempotent, timestamps are UTC and bounded for lateness/skew, counters cannot regress, histogram buckets are ordered, and missing data is `UNKNOWN`. Exporter failure is isolated after commit. SLI/SLO evaluation uses integer basis points and burn-rate microunits, retains immutable evidence and maintenance exclusions, clamps error budgets at zero, and never treats missing telemetry as healthy.
+
+The operations boundary also owns immutable alert rules, deduplicated occurrences, maintenance suppression evidence, incident lifecycle and timeline, versioned non-executable runbooks, and governed maintenance windows. Audit-integrity alerts cannot be suppressed. Production maintenance requires a distinct approver. Runbooks permit guidance and verification steps only—never shell, SQL, cloud commands, scripts, credentials, or arbitrary code—and each execution remains bound to one immutable version.
+
+All Phase 3D repositories, service clients, exporters, workflow processors, and outboxes committed here are deterministic rollback-capable test integrations. Executable startup refuses to choose them. Production still requires regional durable stores, workload identity, transactional outbox workers, approved telemetry backends, policy-signing/promotion controls, and incident operations; no vendor, database, deployment, credential, or Phase 4 infrastructure is added.
+
 ## Validation
 
 ```bash
@@ -75,4 +87,4 @@ python tooling/validate_security.py
 python -m unittest discover -s tests -v
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md), [security baseline](docs/SECURITY.md), [control-plane decision](docs/adr/0003-identity-tenancy-control-plane.md), [billing decision](docs/adr/0004-billing-credits-usage-ledger.md), [data-services decision](docs/adr/0005-platform-data-and-event-services.md), and [roadmap](docs/ROADMAP.md).
+See [ARCHITECTURE.md](ARCHITECTURE.md), [security baseline](docs/SECURITY.md), [control-plane decision](docs/adr/0003-identity-tenancy-control-plane.md), [billing decision](docs/adr/0004-billing-credits-usage-ledger.md), [data-services decision](docs/adr/0005-platform-data-and-event-services.md), [operations-governance decision](docs/adr/0006-platform-operations-governance.md), and [roadmap](docs/ROADMAP.md).
