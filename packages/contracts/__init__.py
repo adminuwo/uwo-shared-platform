@@ -45,6 +45,20 @@ from .data_services import (
     ObjectClassification, ObjectStatus, ObjectVersion, RetentionPolicy, StoredObject, TemplateVersion,
     UploadSession, UploadStatus, contract_fingerprint, contract_json, contract_primitive,
 )
+from .operations import (
+    AlertOccurrence, AlertRule, AlertStatus, ApprovalDecision, BurnRateEvaluation, BurnRateWindow,
+    ConfigurationBundle, ConfigurationDigest, DependencyHealth, ErrorBudget, HIGH_RISK_CATEGORIES,
+    HistogramBucket, Incident, IncidentAssignment, IncidentSeverity, IncidentStatus, IncidentTimelineEntry,
+    MaintenanceWindow, MaintenanceWindowStatus, MetricKind, MetricSample, OperationalHealthSnapshot,
+    OperationalMetric, PolicyApproval, PolicyChangeRequest, PolicyDraft, PolicyDraftStatus, PolicyEnvironment,
+    PolicyPromotion, PolicyRelease, PolicyRollback, PolicyValidationResult, Runbook, RunbookExecution,
+    RunbookExecutionStatus, RunbookStatus, RunbookStep, RunbookStepResult, RunbookStepType, RunbookVersion,
+    SLOEvaluation, SLOEvaluationState, SLOTarget, ServiceHealthStatus, ServiceIdentity, ServiceLevelIndicator,
+    ServiceLevelObjective, TelemetryBatch, TelemetryCheckpoint, TenantAdministrationStep,
+    TenantAdministrationStepStatus, TenantAdministrationWorkflow, TenantAdministrationWorkflowStatus,
+    TenantDecommissionPlan, TenantOnboardingPlan, TenantOperationalProfile, TenantReactivationPlan,
+    TenantSuspensionPlan, WorkflowReceipt, operations_fingerprint, operations_json, operations_primitive,
+)
 
 __all__ = [
     "CAPABILITIES",
@@ -89,4 +103,16 @@ __all__ = [
     "NotificationChannel", "NotificationPreference", "NotificationStatus", "NotificationTemplate",
     "ObjectClassification", "ObjectStatus", "ObjectVersion", "RetentionPolicy", "StoredObject", "TemplateVersion",
     "UploadSession", "UploadStatus", "contract_fingerprint", "contract_json", "contract_primitive",
+    "AlertOccurrence", "AlertRule", "AlertStatus", "ApprovalDecision", "BurnRateEvaluation", "BurnRateWindow",
+    "ConfigurationBundle", "ConfigurationDigest", "DependencyHealth", "ErrorBudget", "HIGH_RISK_CATEGORIES",
+    "HistogramBucket", "Incident", "IncidentAssignment", "IncidentSeverity", "IncidentStatus", "IncidentTimelineEntry",
+    "MaintenanceWindow", "MaintenanceWindowStatus", "MetricKind", "MetricSample", "OperationalHealthSnapshot",
+    "OperationalMetric", "PolicyApproval", "PolicyChangeRequest", "PolicyDraft", "PolicyDraftStatus", "PolicyEnvironment",
+    "PolicyPromotion", "PolicyRelease", "PolicyRollback", "PolicyValidationResult", "Runbook", "RunbookExecution",
+    "RunbookExecutionStatus", "RunbookStatus", "RunbookStep", "RunbookStepResult", "RunbookStepType", "RunbookVersion",
+    "SLOEvaluation", "SLOEvaluationState", "SLOTarget", "ServiceHealthStatus", "ServiceIdentity", "ServiceLevelIndicator",
+    "ServiceLevelObjective", "TelemetryBatch", "TelemetryCheckpoint", "TenantAdministrationStep",
+    "TenantAdministrationStepStatus", "TenantAdministrationWorkflow", "TenantAdministrationWorkflowStatus",
+    "TenantDecommissionPlan", "TenantOnboardingPlan", "TenantOperationalProfile", "TenantReactivationPlan",
+    "TenantSuspensionPlan", "WorkflowReceipt", "operations_fingerprint", "operations_json", "operations_primitive",
 ]

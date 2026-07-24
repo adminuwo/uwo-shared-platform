@@ -127,6 +127,20 @@ class Permission(str, Enum):
     AUDIT_READ = "audit.read"
     AUDIT_EXPORT = "audit.export"
     AUDIT_VERIFY = "audit.verify"
+    TENANT_ADMIN_READ = "tenant_admin.read"
+    TENANT_ADMIN_EXECUTE = "tenant_admin.execute"
+    GOVERNANCE_READ = "governance.read"
+    GOVERNANCE_DRAFT = "governance.draft"
+    GOVERNANCE_APPROVE = "governance.approve"
+    GOVERNANCE_PROMOTE = "governance.promote"
+    OPERATIONS_TELEMETRY_INGEST = "operations.telemetry.ingest"
+    OPERATIONS_TELEMETRY_READ = "operations.telemetry.read"
+    OPERATIONS_SLO_MANAGE = "operations.slo.manage"
+    OPERATIONS_ALERT_MANAGE = "operations.alert.manage"
+    OPERATIONS_INCIDENT_MANAGE = "operations.incident.manage"
+    OPERATIONS_RUNBOOK_READ = "operations.runbook.read"
+    OPERATIONS_RUNBOOK_MANAGE = "operations.runbook.manage"
+    OPERATIONS_MAINTENANCE_MANAGE = "operations.maintenance.manage"
 
 
 @dataclass(frozen=True)
